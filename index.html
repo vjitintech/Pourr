@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1b26">
+<title>Pourr</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<style>
+/* Layout: one-screen app. Header, a big vessel in the middle, controls docked at the bottom. */
+:root{
+  --bg:#eaf1f4; --surface:#ffffff; --fg:#0e2230; --muted:#5b7182; --line:#cfdde5;
+  --water:#1683c4; --water-2:#5fc0ec; --clay:#b4602f; --clay-2:#e3a173; --ok:#1f8a5b; --warn:#b5751a;
+  --display:"Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --body:"IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0b1720; --surface:#132430; --fg:#e4eef4; --muted:#8aa2b2; --line:#22394a;
+  --water:#3aa6e6; --water-2:#7fd2f7; --clay:#d98450; --clay-2:#f0b48a; --ok:#3cc488; --warn:#e3a54a;
+  color-scheme:dark;
+}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 var(--body);
+  padding:env(safe-area-inset-top,0px) max(16px,env(safe-area-inset-right,0px)) env(safe-area-inset-bottom,0px) max(16px,env(safe-area-inset-left,0px));
+  -webkit-tap-highlight-color:transparent;overflow:hidden}
+.app{height:100%;max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:12px;padding-block:14px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.brand{font:800 22px/1 var(--display);letter-spacing:-.02em}
+.brand span{color:var(--water)}
+.pill{font:500 12px/1 var(--mono);padding:7px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted);display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
+.pill i{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
+.pill.on i{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 25%,transparent)}
+.pill.on{color:var(--fg)}
+main{flex:1;min-height:0;display:flex;flex-direction:column;gap:12px;overflow-y:auto}
+h1{font:800 clamp(30px,9vw,44px)/1.02 var(--display);letter-spacing:-.03em;margin:8px 0 4px;text-wrap:balance}
+h2{font:700 22px/1.15 var(--display);letter-spacing:-.01em;margin:0;text-wrap:balance}
+p{margin:0;color:var(--muted);max-width:60ch}
+.roles{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px}
+.role{appearance:none;border:1.5px solid var(--line);background:var(--surface);color:var(--fg);border-radius:20px;padding:18px 14px 16px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:10px;font:inherit}
+.role:focus-visible,.btn:focus-visible,textarea:focus-visible{outline:3px solid var(--water);outline-offset:2px}
+.role svg{width:64px;height:64px}
+.role b{font:700 20px/1 var(--display)}
+.role small{color:var(--muted);font-size:13px;line-height:1.35}
+.role.jug:hover{border-color:var(--clay)} .role.cont:hover{border-color:var(--water)}
+.steps{display:grid;gap:8px;margin-top:4px;padding:0;list-style:none;counter-reset:s}
+.steps li{display:grid;grid-template-columns:26px 1fr;gap:10px;color:var(--muted);font-size:14px}
+.steps li::before{counter-increment:s;content:counter(s);font:500 12px/26px var(--mono);text-align:center;border-radius:50%;background:var(--surface);border:1px solid var(--line);height:26px;color:var(--fg)}
+.btn{appearance:none;border:0;border-radius:14px;padding:14px 18px;font:600 16px/1 var(--body);cursor:pointer;background:var(--fg);color:var(--bg);display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:50px}
+.btn.water{background:var(--water);color:#fff}
+.btn.clay{background:var(--clay);color:#fff}
+.btn.ghost{background:transparent;color:var(--fg);border:1.5px solid var(--line)}
+.btn[disabled]{opacity:.45;cursor:default}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.row .btn{flex:1 1 140px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.qr{background:#fff;border-radius:14px;padding:12px;align-self:center;width:min(78vw,300px);aspect-ratio:1;max-width:100%;display:grid;place-items:center}
+.qr img{width:100%;height:100%;image-rendering:pixelated}
+.cam{position:relative;border-radius:16px;overflow:hidden;background:#000;aspect-ratio:1;width:100%;max-width:340px;align-self:center}
+.cam video{width:100%;height:100%;object-fit:cover;display:block}
+.cam::after{content:"";position:absolute;inset:14%;border:3px solid rgba(255,255,255,.85);border-radius:18px;box-shadow:0 0 0 999px rgba(0,0,0,.35)}
+textarea{width:100%;min-height:72px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font:12px/1.4 var(--mono);padding:10px;resize:vertical}
+details summary{cursor:pointer;color:var(--muted);font-size:13px}
+details[open] summary{margin-bottom:8px}
+.note{font-size:13px;color:var(--muted)}
+.err{color:var(--warn);font-size:14px}
+
+/* Vessel stage */
+.stage{flex:1;min-height:300px;position:relative;display:flex;align-items:center;justify-content:center}
+.vessel{position:relative;width:min(70vw,280px);height:min(58vh,380px);transition:transform .12s linear;transform-origin:50% 85%}
+.vessel svg.shape{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.inside{position:absolute;left:12%;right:12%;top:16%;bottom:7%;overflow:hidden;border-radius:6px 6px 28px 28px;display:flex;flex-direction:column-reverse;gap:6px;padding:8px}
+.waterfill{position:absolute;left:0;right:0;bottom:0;height:0%;background:linear-gradient(180deg,color-mix(in srgb,var(--water-2) 55%,transparent),color-mix(in srgb,var(--water) 70%,transparent));transition:height .25s ease;z-index:0}
+.waterfill::before{content:"";position:absolute;left:-20%;right:-20%;top:-8px;height:16px;background:radial-gradient(ellipse at 50% 100%,color-mix(in srgb,var(--water-2) 60%,transparent) 60%,transparent 62%);animation:wave 2.4s ease-in-out infinite}
+@keyframes wave{50%{transform:translateX(8%)}}
+.tile{position:relative;z-index:1;display:grid;grid-template-columns:34px 1fr;gap:8px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:6px 8px;font-size:12.5px;box-shadow:0 2px 6px rgba(10,30,45,.12);min-width:0;flex:none}
+.tile .ext{font:600 10px/1 var(--mono);text-transform:uppercase;background:var(--fg);color:var(--bg);border-radius:6px;height:26px;display:grid;place-items:center;letter-spacing:.04em;overflow:hidden}
+.tile .nm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.tile .sz{font:400 10.5px/1.2 var(--mono);color:var(--muted)}
+.tile .bar{position:absolute;left:8px;right:8px;bottom:2px;height:2px;border-radius:2px;background:var(--line);overflow:hidden}
+.tile .bar b{display:block;height:100%;width:0;background:var(--water)}
+.tile.leaving{animation:pourOut .7s cubic-bezier(.5,0,.8,.4) forwards}
+@keyframes pourOut{to{transform:translate(var(--dx,160%),-140%) rotate(var(--rot,35deg)) scale(.6);opacity:0}}
+.tile.arriving{animation:dropIn .55s cubic-bezier(.2,.9,.3,1.2)}
+@keyframes dropIn{from{transform:translateY(-320%) rotate(-12deg);opacity:0}to{transform:none;opacity:1}}
+.tilt-read{position:absolute;top:0;left:0;font:500 12px/1 var(--mono);color:var(--muted)}
+.speed{position:absolute;top:0;right:0;font:500 12px/1 var(--mono);color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.gauge{position:absolute;bottom:0;left:50%;transform:translateX(-50%);font:600 13px/1.2 var(--body);color:var(--muted);text-align:center;width:100%}
+.dock{display:flex;flex-direction:column;gap:10px}
+.empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:var(--muted);font-size:13px;padding:20%;z-index:1;pointer-events:none}
+.saved-list{display:grid;gap:6px;max-height:30vh;overflow:auto}
+.saved-list a{color:var(--water);font-size:14px;word-break:break-all}
+@media (prefers-reduced-motion:reduce){.tile.leaving,.tile.arriving,.waterfill::before{animation:none}.vessel{transition:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">Pourr<span>.</span></div>
+    <div class="pill" id="link"><i></i><span id="linkText">Not paired</span></div>
+  </header>
+  <main id="view"></main>
+</div>
+
+<script>
+"use strict";
+/* ---------- helpers ---------- */
+const $ = (s, r=document) => r.querySelector(s);
+const view = $('#view');
+const fmt = b => b < 1024 ? b+' B' : b < 1048576 ? (b/1024).toFixed(1)+' KB' : b < 1073741824 ? (b/1048576).toFixed(1)+' MB' : (b/1073741824).toFixed(2)+' GB';
+const extOf = n => { const m = /\.([a-z0-9]{1,5})$/i.exec(n); return m ? m[1] : 'file'; };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function setLink(on, text){ $('#link').classList.toggle('on', on); $('#linkText').textContent = text; }
+
+const JUG_SVG = `<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M18 14h24l4-4h6l-6 10v30a8 8 0 0 1-8 8H24a8 8 0 0 1-8-8V20z" fill="var(--clay)"/><path d="M46 24c8 0 10 6 10 10s-3 10-10 10" fill="none" stroke="var(--clay)" stroke-width="4"/><path d="M19 34h26v16a6 6 0 0 1-6 6H25a6 6 0 0 1-6-6z" fill="var(--clay-2)" opacity=".6"/></svg>`;
+const CONT_SVG = `<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M12 10h40l-4 44a6 6 0 0 1-6 5H22a6 6 0 0 1-6-5z" fill="none" stroke="var(--water)" stroke-width="4" stroke-linejoin="round"/><path d="M15 34h34l-2 20a4 4 0 0 1-4 3H21a4 4 0 0 1-4-3z" fill="var(--water)" opacity=".7"/></svg>`;
+
+/* ---------- signaling codec (SDP -> deflate -> base64url) ---------- */
+async function pack(desc){
+  const raw = new TextEncoder().encode(desc.type[0] + desc.sdp);
+  let bytes = raw;
+  if ('CompressionStream' in window) {
+    const cs = new Blob([raw]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+    bytes = new Uint8Array(await new Response(cs).arrayBuffer());
+    return 'Z' + b64(bytes);
+  }
+  return 'R' + b64(bytes);
+}
+async function unpack(code){
+  code = code.trim();
+  const kind = code[0], bytes = unb64(code.slice(1));
+  let txt;
+  if (kind === 'Z') {
+    const ds = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    txt = await new Response(ds).text();
+  } else if (kind === 'R') txt = new TextDecoder().decode(bytes);
+  else throw new Error('That code is not from Pourr.');
+  return { type: txt[0] === 'o' ? 'offer' : 'answer', sdp: txt.slice(1) };
+}
+function b64(u8){ let s=''; for (let i=0;i<u8.length;i+=0x8000) s += String.fromCharCode.apply(null, u8.subarray(i,i+0x8000)); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+function unb64(s){ s = s.replace(/-/g,'+').replace(/_/g,'/'); while (s.length%4) s+='='; const b = atob(s); const u = new Uint8Array(b.length); for (let i=0;i<b.length;i++) u[i]=b.charCodeAt(i); return u; }
+function waitIce(pc){ return new Promise(res => { if (pc.iceGatheringState === 'complete') return res(); const t = setTimeout(res, 2500); pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } }); }); }
+
+function qrImg(text){
+  const q = qrcode(0, 'L'); q.addData(text, 'Byte'); q.make();
+  return q.createDataURL(4, 2);
+}
+
+/* ---------- camera QR scanner ---------- */
+let camStream = null;
+async function warmCamera(){
+  // Granting camera first also lets browsers share real local addresses, which helps pairing on hotspots.
+  if (camStream) return camStream;
+  camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+  return camStream;
+}
+function stopCamera(){ if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; } }
+async function scanInto(box, onCode){
+  const video = document.createElement('video');
+  video.setAttribute('playsinline',''); video.muted = true;
+  box.innerHTML = ''; box.appendChild(video);
+  video.srcObject = await warmCamera(); await video.play();
+  const det = ('BarcodeDetector' in window) ? new BarcodeDetector({ formats: ['qr_code'] }) : null;
+  const cv = document.createElement('canvas'), cx = cv.getContext('2d', { willReadFrequently: true });
+  let done = false;
+  async function tick(){
+    if (done || !video.isConnected) return;
+    try {
+      let val = null;
+      if (det) { const r = await det.detect(video); if (r[0]) val = r[0].rawValue; }
+      else if (video.videoWidth) {
+        const w = 480, h = Math.round(480 * video.videoHeight / video.videoWidth);
+        cv.width = w; cv.height = h; cx.drawImage(video, 0, 0, w, h);
+        const r = jsQR(cx.getImageData(0,0,w,h).data, w, h, { inversionAttempts: 'dontInvert' });
+        if (r) val = r.data;
+      }
+      if (val) { done = true; if (navigator.vibrate) navigator.vibrate(30); onCode(val); return; }
+    } catch(e) {}
+    requestAnimationFrame(tick);
+  }
+  tick();
+  return () => { done = true; };
+}
+
+/* ---------- connection ---------- */
+let pc = null, dc = null, role = null;
+function newPeer(){
+  pc = new RTCPeerConnection({ iceServers: [] }); // local network only, no internet servers
+  pc.addEventListener('connectionstatechange', () => {
+    if (['failed','disconnected','closed'].includes(pc.connectionState)) setLink(false, 'Disconnected');
+  });
+}
+function wireChannel(ch, onOpen){
+  dc = ch; dc.binaryType = 'arraybuffer';
+  dc.onopen = () => { setLink(true, 'Paired · local Wi-Fi'); stopCamera(); onOpen(); };
+  dc.onclose = () => setLink(false, 'Disconnected');
+}
+
+/* ---------- home ---------- */
+function home(){
+  stopCamera(); setLink(false, 'Not paired');
+  view.innerHTML = `
+    <h1>Pour files from one phone into another.</h1>
+    <p>Both phones join the same Wi-Fi or one phone's hotspot. No internet is used for the transfer.</p>
+    <div class="roles">
+      <button class="role jug" id="pickJug">${JUG_SVG}<b>Jug</b><small>I'm sending. Fill the jug with files, then tilt to pour.</small></button>
+      <button class="role cont" id="pickCont">${CONT_SVG}<b>Container</b><small>I'm receiving. Hold the phone upright and catch the files.</small></button>
+    </div>
+    <ol class="steps">
+      <li>Jug shows a pairing code. Container scans it.</li>
+      <li>Container shows a reply code. Jug scans it.</li>
+      <li>Fill the jug and tilt past 40°. Files slide across in order.</li>
+    </ol>`;
+  $('#pickJug').onclick = jugPair;
+  $('#pickCont').onclick = contPair;
+}
+
+/* ---------- JUG: pairing ---------- */
+async function jugPair(){
+  role = 'jug';
+  view.innerHTML = `<div class="card"><h2>Step 1 · Show this to the Container</h2><p>Preparing a pairing code…</p></div>`;
+  try { await warmCamera(); } catch(e) { /* scanning can fall back to pasting codes */ }
+  newPeer();
+  wireChannel(pc.createDataChannel('pour', { ordered: true }), jugStage);
+  await pc.setLocalDescription(await pc.createOffer());
+  await waitIce(pc);
+  const code = await pack(pc.localDescription);
+  view.innerHTML = `
+    <div class="card">
+      <h2>Step 1 · Container scans this</h2>
+      <div class="qr"><img alt="Pairing code" src="${qrImg(code)}"></div>
+      <details><summary>Can't scan? Copy the code instead</summary><textarea id="myCode" readonly>${code}</textarea><button class="btn ghost" id="copy" style="margin-top:8px">Copy code</button></details>
+    </div>
+    <div class="card">
+      <h2>Step 2 · Scan the Container's reply</h2>
+      <div class="row"><button class="btn clay" id="scanReply">Scan reply code</button></div>
+      <div class="cam" id="cam" hidden></div>
+      <details><summary>Paste the reply code instead</summary><textarea id="paste" placeholder="Paste reply code"></textarea><button class="btn ghost" id="usePaste" style="margin-top:8px">Connect</button></details>
+      <div class="err" id="err"></div>
+    </div>
+    <button class="btn ghost" id="back">Back</button>`;
+  $('#back').onclick = () => { pc.close(); home(); };
+  $('#copy').onclick = () => copyText(code, $('#myCode'));
+  const accept = async (c) => {
+    try { const d = await unpack(c); if (d.type !== 'answer') throw new Error('Scan the code from the Container phone.'); await pc.setRemoteDescription(d); $('#err').textContent = 'Connecting…'; }
+    catch(e){ $('#err').textContent = e.message || 'That code did not work. Try again.'; }
+  };
+  $('#scanReply').onclick = async () => { const cam = $('#cam'); cam.hidden = false; try { await scanInto(cam, c => { cam.hidden = true; accept(c); }); } catch(e){ cam.hidden = true; $('#err').textContent = 'Camera unavailable. Paste the reply code instead.'; } };
+  $('#usePaste').onclick = () => accept($('#paste').value);
+}
+
+/* ---------- CONTAINER: pairing ---------- */
+async function contPair(){
+  role = 'container';
+  view.innerHTML = `
+    <div class="card">
+      <h2>Step 1 · Scan the Jug's code</h2>
+      <div class="row"><button class="btn water" id="scan">Scan pairing code</button></div>
+      <div class="cam" id="cam" hidden></div>
+      <details><summary>Paste the code instead</summary><textarea id="paste" placeholder="Paste pairing code"></textarea><button class="btn ghost" id="usePaste" style="margin-top:8px">Continue</button></details>
+      <div class="err" id="err"></div>
+    </div>
+    <button class="btn ghost" id="back">Back</button>`;
+  $('#back').onclick = home;
+  const accept = async (c) => {
+    try {
+      const d = await unpack(c); if (d.type !== 'offer') throw new Error('Scan the code from the Jug phone.');
+      newPeer();
+      pc.ondatachannel = e => wireChannel(e.channel, contStage);
+      await pc.setRemoteDescription(d);
+      await pc.setLocalDescription(await pc.createAnswer());
+      await waitIce(pc);
+      const code = await pack(pc.localDescription);
+      view.innerHTML = `
+        <div class="card">
+          <h2>Step 2 · Jug scans this reply</h2>
+          <div class="qr"><img alt="Reply code" src="${qrImg(code)}"></div>
+          <p class="note">This screen switches to the container as soon as the phones connect.</p>
+          <details><summary>Can't scan? Copy the code instead</summary><textarea id="myCode" readonly>${code}</textarea><button class="btn ghost" id="copy" style="margin-top:8px">Copy code</button></details>
+        </div>
+        <button class="btn ghost" id="back2">Start over</button>`;
+      $('#copy').onclick = () => copyText(code, $('#myCode'));
+      $('#back2').onclick = () => { pc.close(); home(); };
+    } catch(e){ $('#err').textContent = e.message || 'That code did not work. Try again.'; }
+  };
+  $('#scan').onclick = async () => { const cam = $('#cam'); cam.hidden = false; try { await scanInto(cam, c => { cam.hidden = true; stopCamera(); accept(c); }); } catch(e){ cam.hidden = true; $('#err').textContent = 'Camera unavailable. Paste the code instead.'; } };
+  $('#usePaste').onclick = () => accept($('#paste').value);
+}
+
+function copyText(t, ta){ navigator.clipboard?.writeText(t).catch(() => { ta.select(); document.execCommand('copy'); }); }
+
+/* ---------- tilt sensing ---------- */
+const POUR_ANGLE = 40;
+let tilt = 0, tiltOK = false, holdPour = false;
+function onOrient(e){
+  // Use whichever axis is tipped further; screen orientation flips gamma's meaning in landscape.
+  const g = e.gamma || 0, b = e.beta || 0;
+  const ang = (screen.orientation && Math.abs(screen.orientation.angle) === 90) ? (b) : g;
+  tilt = ang; tiltOK = true;
+}
+async function enableTilt(){
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const r = await DeviceOrientationEvent.requestPermission(); if (r !== 'granted') return false;
+    }
+    window.addEventListener('deviceorientation', onOrient);
+    return true;
+  } catch(e){ return false; }
+}
+
+/* ---------- JUG stage: fill + pour ---------- */
+let jugFiles = [];       // queue, FIFO
+let pouring = false, sending = false, resumeWaiters = [];
+const CHUNK_DEFAULT = 64 * 1024;
+function chunkSize(){ const m = pc?.sctp?.maxMessageSize; return Math.max(16384, Math.min(m && isFinite(m) ? m : CHUNK_DEFAULT, 256 * 1024)); }
+
+function jugStage(){
+  view.innerHTML = `
+    <div class="stage">
+      <div class="tilt-read" id="tiltRead">tilt 0°</div>
+      <div class="speed" id="speed"></div>
+      <div class="vessel" id="vessel">
+        <svg class="shape" viewBox="0 0 200 280" preserveAspectRatio="none" aria-hidden="true">
+          <path d="M150 52 C 196 52 196 150 150 156" fill="none" stroke="var(--clay)" stroke-width="12" stroke-linecap="round"/>
+          <path d="M22 30 L178 30 L196 8 M22 30 Q 16 40 20 60 L 26 248 Q 28 272 54 272 L 146 272 Q 172 272 174 248 L 180 60 Q 184 40 178 30" fill="none" stroke="var(--clay)" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+        </svg>
+        <div class="inside" id="inside"><div class="waterfill" id="fill" style="background:linear-gradient(180deg,color-mix(in srgb,var(--clay-2) 45%,transparent),color-mix(in srgb,var(--clay) 55%,transparent))"></div></div>
+        <div class="empty" id="empty">The jug is empty.<br>Add files to fill it.</div>
+      </div>
+      <div class="gauge" id="gauge"></div>
+    </div>
+    <div class="dock">
+      <input type="file" id="pick" multiple hidden>
+      <div class="row">
+        <button class="btn ghost" id="add">Add files</button>
+        <button class="btn clay" id="tiltBtn">Enable tilt to pour</button>
+      </div>
+      <button class="btn ghost" id="hold" disabled>Hold here to pour (no tilt sensor)</button>
+    </div>`;
+  $('#add').onclick = () => $('#pick').click();
+  $('#pick').onchange = e => { addToJug([...e.target.files]); e.target.value = ''; };
+  $('#tiltBtn').onclick = async () => {
+    const ok = await enableTilt();
+    $('#tiltBtn').textContent = ok ? 'Tilt is on · tip to pour' : 'Tilt unavailable · use hold';
+    $('#tiltBtn').disabled = true;
+    if (!ok) $('#hold').disabled = false;
+    setTimeout(() => { if (!tiltOK) $('#hold').disabled = false; }, 1500);
+  };
+  const hold = $('#hold');
+  const on = e => { e.preventDefault(); holdPour = true; }, off = () => { holdPour = false; };
+  hold.addEventListener('pointerdown', on); hold.addEventListener('pointerup', off); hold.addEventListener('pointerleave', off); hold.addEventListener('pointercancel', off);
+  if (!('DeviceOrientationEvent' in window)) hold.disabled = false;
+  renderJug(); requestAnimationFrame(jugLoop);
+}
+function addToJug(files){
+  for (const f of files) jugFiles.push({ id: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()), file: f, sent: 0, el: null });
+  renderJug();
+}
+function tileHTML(name, size){ return `<div class="ext">${esc(extOf(name)).slice(0,4)}</div><div style="min-width:0"><div class="nm">${esc(name)}</div><div class="sz">${fmt(size)}</div></div><div class="bar"><b></b></div>`; }
+function renderJug(){
+  const inside = $('#inside'); if (!inside) return;
+  for (const it of jugFiles) if (!it.el) { it.el = document.createElement('div'); it.el.className = 'tile'; it.el.innerHTML = tileHTML(it.file.name, it.file.size); inside.appendChild(it.el); }
+  const total = jugFiles.reduce((a,b) => a + b.file.size, 0), left = jugFiles.reduce((a,b) => a + b.file.size - b.sent, 0);
+  $('#empty').hidden = jugFiles.length > 0;
+  $('#fill').style.height = jugFiles.length ? Math.max(12, Math.min(92, 18 + jugFiles.length * 9)) * (total ? left/total : 1) + '%' : '0%';
+  $('#gauge').textContent = jugFiles.length ? `${jugFiles.length} file${jugFiles.length>1?'s':''} · ${fmt(left)} to pour` : '';
+}
+function jugLoop(){
+  if (role !== 'jug' || !$('#vessel')) return;
+  const ang = holdPour ? 55 : tilt;
+  const vis = Math.max(-75, Math.min(75, ang));
+  $('#vessel').style.transform = `rotate(${vis}deg)`;
+  $('#tiltRead').textContent = holdPour ? 'pouring (hold)' : `tilt ${Math.round(Math.abs(ang))}°`;
+  const want = (Math.abs(ang) >= POUR_ANGLE) && jugFiles.length > 0 && dc && dc.readyState === 'open';
+  if (want !== pouring) {
+    pouring = want;
+    document.documentElement.style.setProperty('--dx', (ang < 0 ? '-160%' : '160%'));
+    document.documentElement.style.setProperty('--rot', (ang < 0 ? '-35deg' : '35deg'));
+    if (pouring) { resumeWaiters.splice(0).forEach(r => r()); if (!sending) pourQueue(); }
+  }
+  requestAnimationFrame(jugLoop);
+}
+const waitPour = () => pouring ? Promise.resolve() : new Promise(r => resumeWaiters.push(r));
+function waitDrain(){ return new Promise(r => { if (dc.bufferedAmount < dc.bufferedAmountLowThreshold) return r(); dc.addEventListener('bufferedamountlow', r, { once: true }); }); }
+
+async function pourQueue(){
+  sending = true;
+  const CH = chunkSize(), HIGH = 8 * 1048576;
+  dc.bufferedAmountLowThreshold = 2 * 1048576;
+  const total = jugFiles.reduce((a,b) => a + b.file.size, 0);
+  dc.send(JSON.stringify({ t: 'batch', count: jugFiles.length, total }));
+  let t0 = performance.now(), bytes = 0;
+  const spd = setInterval(() => { const s = (performance.now() - t0) / 1000; if (s > 0.2) $('#speed') && ($('#speed').textContent = (bytes/1048576/s).toFixed(1) + ' MB/s'); }, 400);
+  try {
+    while (jugFiles.length) {
+      await waitPour();
+      const it = jugFiles[0], f = it.file;           // first in, first out
+      dc.send(JSON.stringify({ t: 'meta', id: it.id, name: f.name, size: f.size, type: f.type }));
+      it.el.querySelector('.bar b').style.width = '0%';
+      const READ = 4 * 1048576;                       // read big slices, send small chunks
+      for (let off = 0; off < f.size; off += READ) {
+        const buf = await f.slice(off, off + READ).arrayBuffer();
+        for (let p = 0; p < buf.byteLength; p += CH) {
+          if (!pouring) await waitPour();
+          if (dc.bufferedAmount > HIGH) await waitDrain();
+          dc.send(buf.slice(p, p + CH));
+          const n = Math.min(CH, buf.byteLength - p); it.sent += n; bytes += n;
+        }
+        it.el.querySelector('.bar b').style.width = (it.sent / f.size * 100) + '%';
+        renderJug();
+      }
+      dc.send(JSON.stringify({ t: 'end', id: it.id }));
+      it.el.classList.add('leaving');
+      const el = it.el; setTimeout(() => el.remove(), 700);
+      jugFiles.shift(); renderJug();
+    }
+    await waitDrain();
+    dc.send(JSON.stringify({ t: 'done' }));
+    $('#gauge').textContent = 'Jug is empty. All files poured.';
+    if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
+  } catch(e) { $('#gauge').textContent = 'Pour stopped: the connection dropped.'; }
+  finally { clearInterval(spd); sending = false; }
+}
+
+/* ---------- CONTAINER stage: catch + save ---------- */
+let received = [], current = null, batchTotal = 0, gotBytes = 0, rxT0 = 0;
+function contStage(){
+  view.innerHTML = `
+    <div class="stage">
+      <div class="tilt-read">holding upright</div>
+      <div class="speed" id="speed"></div>
+      <div class="vessel">
+        <svg class="shape" viewBox="0 0 200 280" preserveAspectRatio="none" aria-hidden="true">
+          <path d="M14 22 L186 22 L174 252 Q 172 274 148 274 L 52 274 Q 28 274 26 252 Z" fill="none" stroke="var(--water)" stroke-width="7" stroke-linejoin="round"/>
+          <path d="M8 22 L192 22" stroke="var(--water)" stroke-width="9" stroke-linecap="round"/>
+        </svg>
+        <div class="inside" id="inside"><div class="waterfill" id="fill"></div></div>
+        <div class="empty" id="empty">Waiting for the jug to pour…</div>
+      </div>
+      <div class="gauge" id="gauge"></div>
+    </div>
+    <div class="dock" id="dock"></div>`;
+  dc.onmessage = onRx;
+}
+function onRx(e){
+  if (typeof e.data === 'string') {
+    const m = JSON.parse(e.data);
+    if (m.t === 'batch') { batchTotal += m.total; if (!rxT0) rxT0 = performance.now(); $('#empty').hidden = true; }
+    else if (m.t === 'meta') {
+      const el = document.createElement('div'); el.className = 'tile arriving'; el.innerHTML = tileHTML(m.name, m.size);
+      $('#inside').appendChild(el);                  // column-reverse: first file settles at the bottom
+      current = { ...m, chunks: [], got: 0, el };
+    }
+    else if (m.t === 'end' && current) {
+      const file = new File(current.chunks, current.name, { type: current.type || 'application/octet-stream' });
+      current.el.querySelector('.bar b').style.width = '100%';
+      received.push(file); current = null; if (navigator.vibrate) navigator.vibrate(10);
+    }
+    else if (m.t === 'done') finishRx();
+    return;
+  }
+  if (!current) return;
+  current.chunks.push(e.data); current.got += e.data.byteLength; gotBytes += e.data.byteLength;
+  current.el.querySelector('.bar b').style.width = (current.got / current.size * 100) + '%';
+  $('#fill').style.height = Math.min(92, (gotBytes / (batchTotal || 1)) * 92) + '%';
+  const s = (performance.now() - rxT0) / 1000;
+  if (s > 0.2) $('#speed').textContent = (gotBytes/1048576/s).toFixed(1) + ' MB/s';
+  $('#gauge').textContent = `${received.length + 1} arriving · ${fmt(gotBytes)} of ${fmt(batchTotal)}`;
+}
+function finishRx(){
+  const n = received.length, size = received.reduce((a,b) => a + b.size, 0);
+  $('#gauge').textContent = `${n} file${n>1?'s':''} received · ${fmt(size)}`;
+  $('#dock').innerHTML = `
+    <div class="card">
+      <h2>Save ${n} file${n>1?'s':''} to Files?</h2>
+      <div class="row"><button class="btn water" id="save">Save to Files</button><button class="btn ghost" id="discard">Discard</button></div>
+      <div class="saved-list" id="list"></div>
+    </div>`;
+  $('#save').onclick = saveAll;
+  $('#discard').onclick = resetContainer;
+}
+async function saveAll(){
+  const files = received.slice();
+  if (navigator.canShare && navigator.canShare({ files })) {
+    try { await navigator.share({ files }); return resetContainer(); } catch(e) { if (e.name === 'AbortError') return; }
+  }
+  // Fallback: one download per file, in arrival order.
+  const list = $('#list'); list.innerHTML = '';
+  for (const f of files) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.textContent = 'Save ' + f.name;
+    list.appendChild(a); a.click(); await new Promise(r => setTimeout(r, 350));
+  }
+  $('#gauge').textContent = 'Saved. Tap a name above if a download was blocked.';
+}
+function resetContainer(){
+  received = []; batchTotal = 0; gotBytes = 0; rxT0 = 0;
+  [...document.querySelectorAll('#inside .tile')].forEach(t => t.remove());
+  $('#fill').style.height = '0%'; $('#empty').hidden = false; $('#dock').innerHTML = ''; $('#speed').textContent = ''; $('#gauge').textContent = '';
+}
+
+/* ---------- boot ---------- */
+if (!window.RTCPeerConnection) {
+  view.innerHTML = `<h1>This browser can't pair phones.</h1><p>Open this page in Chrome, Safari or Firefox on a phone.</p>`;
+} else home();
+try { navigator.wakeLock?.request('screen').catch(()=>{}); } catch(e){}
+</script>
+</body>
+</html>
