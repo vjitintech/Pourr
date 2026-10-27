@@ -15,7 +15,9 @@ Sharing files should feel as natural as pouring water from a jug into a glass. W
 
 ## Requirements
 
-- Both phones on the same Wi-Fi network or one phone's hotspot. The transfer itself uses no internet.
+- **Same Wi-Fi or hotspot:** works with no internet at all.
+- **Different Wi-Fi networks or mobile data:** both phones need internet. Most connect directly; some mobile carriers block direct connections, so add a free relay (TURN) server under "Different networks or mobile data" on the home screen. A free Metered account (metered.ca) gives 20 GB of relay traffic per month.
+- **Far apart:** the Jug can share a pairing link through any chat app, and the Container shares its reply code back.
 - Open the page over HTTPS (GitHub Pages does this) so the camera and tilt sensor work.
 - On iPhone, allow camera and motion access when asked.
 
@@ -25,4 +27,4 @@ Open the page in two browser tabs, choose Jug in one and Container in the other,
 
 ## How it's built
 
-A single `index.html` with no build step. Phones connect directly using WebRTC data channels on the local network, paired by QR code with no server. Files are read in large slices and sent as ordered chunks with flow control, and the receiver rebuilds each file as it arrives.
+A single `index.html` with no build step. Phones connect directly using WebRTC data channels, paired by QR code or shared link with no signaling server. Public STUN servers find a route across networks, and an optional TURN relay covers networks that block direct connections. Files are read in large slices and sent as ordered chunks with flow control, and the receiver rebuilds each file as it arrives.

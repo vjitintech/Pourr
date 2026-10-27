@@ -27,6 +27,7 @@
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 html,body{height:100%;margin:0}
+@supports (height:100dvh){html,body{height:100dvh}}
 body{background:var(--bg);color:var(--fg);font:15px/1.5 var(--body);
   padding:env(safe-area-inset-top,0px) max(16px,env(safe-area-inset-right,0px)) env(safe-area-inset-bottom,0px) max(16px,env(safe-area-inset-left,0px));
   -webkit-tap-highlight-color:transparent;overflow:hidden}
@@ -105,6 +106,39 @@ details[open] summary{margin-bottom:8px}
 .status.ok{color:var(--ok)}
 .banner{display:flex;flex-direction:column;gap:10px;align-items:stretch}
 .save-opts{display:grid;gap:8px}
+/* Responsive layout: phones stack vessel over controls; wide or landscape screens put controls beside the vessel. */
+.app{max-width:1120px}
+main.home,main.pair{align-items:center}
+main.home > *,main.pair > *{width:100%;max-width:560px}
+main.work{display:grid;grid-template-rows:minmax(0,1fr) auto;overflow:hidden}
+main.work .dock{max-height:46dvh;overflow-y:auto;width:100%;max-width:560px;justify-self:center;padding-bottom:2px}
+.stage{container-type:size;flex:none;height:100%;min-height:220px}
+.vessel{height:auto;aspect-ratio:200/280;width:min(calc((100cqh - 56px) * .714),calc(100cqw - 24px),320px);max-width:100%}
+.qr{width:min(84vw,360px,46dvh)}
+@media (min-width:760px){
+  main.pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;align-content:start;gap:16px}
+  main.pair > *{max-width:none}
+  main.pair > .btn{grid-column:1/-1;justify-self:start;width:auto}
+}
+@media (min-width:760px), (orientation:landscape) and (min-width:560px){
+  main.work{grid-template-columns:minmax(0,1fr) minmax(260px,380px);grid-template-rows:minmax(0,1fr);align-items:center;gap:20px}
+  main.work .dock{max-height:100%;justify-self:stretch}
+}
+@media (max-height:600px){.app{gap:8px;padding-block:8px} h1{font-size:26px;margin-top:2px} .role{padding:12px} .role svg{width:40px;height:40px} .btn{min-height:44px;padding:11px 14px}}
+@media (max-width:380px){.brand{font-size:19px} .roles{grid-template-columns:1fr} .role{display:grid;grid-template-columns:44px 1fr;align-items:center;column-gap:12px} .role svg{width:44px;height:44px;grid-row:span 2} .pill{padding:6px 8px}}
+@media (max-width:340px){#linkText{display:none}}
+.scanner{position:fixed;inset:0;z-index:50;background:rgba(4,12,18,.94);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+  padding:max(16px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.scanner .cam{width:min(92vw,520px,70dvh);max-width:100%}
+.scanner p{color:#d7e6ee;text-align:center}
+.scanner .btn.ghost{color:#fff;border-color:rgba(255,255,255,.4);min-width:160px}
+details.card{display:block}
+details.card summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px;color:var(--fg);font-weight:500}
+.net{display:grid;gap:8px;margin-top:10px}
+.net label{font-size:13px;color:var(--muted);display:grid;gap:4px}
+.net input{width:100%;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font:13px/1.3 var(--mono);padding:10px}
+.tag{font:500 11px/1 var(--mono);padding:4px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.tag.on{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 50%,var(--line))}
 @media (prefers-reduced-motion:reduce){.tile.leaving,.tile.arriving,.waterfill::before{animation:none}.vessel{transition:none}}
 </style>
 </head>
@@ -118,6 +152,11 @@ details[open] summary{margin-bottom:8px}
     </div>
   </header>
   <main id="view"></main>
+</div>
+<div class="scanner" id="scanner" hidden role="dialog" aria-label="Scan QR code">
+  <div class="cam" id="scanCam"></div>
+  <p id="scanMsg">Point the camera at the QR code on the other phone.</p>
+  <button class="btn ghost" id="scanClose">Cancel</button>
 </div>
 
 <script>
@@ -135,7 +174,9 @@ const CONT_SVG = `<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M12 10h40
 
 /* ---------- signaling codec (SDP -> deflate -> base64url) ---------- */
 async function pack(desc){
-  const raw = new TextEncoder().encode(desc.type[0] + desc.sdp);
+  // Drop TCP candidates: they are rarely used and make the QR code denser.
+  const sdp = desc.sdp.split('\r\n').filter(l => !/^a=candidate:\S+ \d+ tcp /i.test(l)).join('\r\n');
+  const raw = new TextEncoder().encode(desc.type[0] + sdp);
   let bytes = raw;
   if ('CompressionStream' in window) {
     const cs = new Blob([raw]).stream().pipeThrough(new CompressionStream('deflate-raw'));
@@ -145,7 +186,8 @@ async function pack(desc){
   return 'R' + b64(bytes);
 }
 async function unpack(code){
-  code = code.trim();
+  code = code.trim().replace(/\s+/g, '');
+  const h = code.match(/#[oa]=(.+)$/); if (h) code = h[1];
   const kind = code[0], bytes = unb64(code.slice(1));
   let txt;
   if (kind === 'Z') {
@@ -157,7 +199,7 @@ async function unpack(code){
 }
 function b64(u8){ let s=''; for (let i=0;i<u8.length;i+=0x8000) s += String.fromCharCode.apply(null, u8.subarray(i,i+0x8000)); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 function unb64(s){ s = s.replace(/-/g,'+').replace(/_/g,'/'); while (s.length%4) s+='='; const b = atob(s); const u = new Uint8Array(b.length); for (let i=0;i<b.length;i++) u[i]=b.charCodeAt(i); return u; }
-function waitIce(pc){ return new Promise(res => { if (pc.iceGatheringState === 'complete') return res(); const t = setTimeout(res, 2500); pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } }); }); }
+function waitIce(pc){ return new Promise(res => { if (pc.iceGatheringState === 'complete') return res(); const t = setTimeout(res, 3500); pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } }); }); }
 
 function qrImg(text){
   const q = qrcode(0, 'L'); q.addData(text, 'Byte'); q.make();
@@ -165,52 +207,105 @@ function qrImg(text){
 }
 
 /* ---------- camera QR scanner ---------- */
-let camStream = null;
-async function warmCamera(){
-  // Granting camera first also lets browsers share real local addresses, which helps pairing on hotspots.
-  if (camStream) return camStream;
-  camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-  return camStream;
+let camStream = null, scanStop = null;
+async function getCam(){
+  try { return await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }); }
+  catch(e){ if (e.name === 'NotAllowedError' || e.name === 'SecurityError') throw e; return navigator.mediaDevices.getUserMedia({ video: true, audio: false }); }
 }
+// Granting the camera before pairing lets browsers share real local addresses, which helps on hotspots.
+async function warmCamera(){ if (!camStream) camStream = await getCam(); return camStream; }
 function stopCamera(){ if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; } }
-async function scanInto(box, onCode){
-  const video = document.createElement('video');
-  video.setAttribute('playsinline',''); video.muted = true;
-  box.innerHTML = ''; box.appendChild(video);
-  video.srcObject = await warmCamera(); await video.play();
-  const det = ('BarcodeDetector' in window) ? new BarcodeDetector({ formats: ['qr_code'] }) : null;
-  const cv = document.createElement('canvas'), cx = cv.getContext('2d', { willReadFrequently: true });
-  let done = false;
-  async function tick(){
-    if (done || !video.isConnected) return;
+function camError(e){
+  return (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError'))
+    ? 'Camera access is blocked. Allow the camera for this site in your browser settings, or paste the code instead.'
+    : 'The camera could not start. Close other apps using it, or paste the code instead.';
+}
+// Opens a full-screen scanner with a fresh camera stream; resolves with the code text, or null if cancelled.
+function openScanner(){
+  return new Promise(async (resolve, reject) => {
+    const ov = $('#scanner'), box = $('#scanCam');
+    stopCamera();
+    let stream;
+    try { stream = await getCam(); } catch(e){ return reject(e); }
+    camStream = stream;
+    const video = document.createElement('video');
+    video.setAttribute('playsinline', ''); video.setAttribute('autoplay', ''); video.muted = true;
+    box.innerHTML = ''; box.appendChild(video);
+    ov.hidden = false;
+    video.srcObject = stream;
+    try { await video.play(); } catch(e){}
+    let det = null;
+    try { if ('BarcodeDetector' in window && (await BarcodeDetector.getSupportedFormats()).includes('qr_code')) det = new BarcodeDetector({ formats: ['qr_code'] }); } catch(e){}
+    const cv = document.createElement('canvas'), cx = cv.getContext('2d', { willReadFrequently: true });
+    let done = false;
+    const finish = val => { if (done) return; done = true; ov.hidden = true; box.innerHTML = ''; stopCamera(); scanStop = null; resolve(val); };
+    scanStop = () => finish(null);
+    $('#scanClose').onclick = () => finish(null);
+    async function tick(){
+      if (done) return;
+      try {
+        let val = null;
+        if (det) { const r = await det.detect(video); if (r[0]) val = r[0].rawValue; }
+        else if (video.videoWidth) {
+          const w = Math.min(960, video.videoWidth), h = Math.round(w * video.videoHeight / video.videoWidth);
+          cv.width = w; cv.height = h; cx.drawImage(video, 0, 0, w, h);
+          const r = jsQR(cx.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: 'attemptBoth' });
+          if (r) val = r.data;
+        }
+        if (val) { if (navigator.vibrate) navigator.vibrate(30); return finish(val); }
+      } catch(e){}
+      setTimeout(() => requestAnimationFrame(tick), 60);
+    }
+    tick();
+  });
+}
+async function scanButton(errEl, onCode){
+  try { const v = await openScanner(); if (v) onCode(v); }
+  catch(e){ errEl.textContent = camError(e); }
+}
+
+/* ---------- network settings: STUN always, optional TURN relay for strict mobile networks ---------- */
+const STUN = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
+function loadNet(){ try { return JSON.parse(localStorage.getItem('pourr.net') || '{}'); } catch(e){ return {}; } }
+function saveNet(n){ try { localStorage.setItem('pourr.net', JSON.stringify(n)); return true; } catch(e){ return false; } }
+const hasRelay = () => { const n = loadNet(); return !!(n.meteredUrl || n.turnUrl); };
+async function iceServers(){
+  if (navigator.onLine === false) return [];           // offline: same Wi-Fi or hotspot only
+  const n = loadNet(), list = [...STUN];
+  if (n.meteredUrl) {
     try {
-      let val = null;
-      if (det) { const r = await det.detect(video); if (r[0]) val = r[0].rawValue; }
-      else if (video.videoWidth) {
-        const w = 480, h = Math.round(480 * video.videoHeight / video.videoWidth);
-        cv.width = w; cv.height = h; cx.drawImage(video, 0, 0, w, h);
-        const r = jsQR(cx.getImageData(0,0,w,h).data, w, h, { inversionAttempts: 'dontInvert' });
-        if (r) val = r.data;
-      }
-      if (val) { done = true; if (navigator.vibrate) navigator.vibrate(30); onCode(val); return; }
-    } catch(e) {}
-    requestAnimationFrame(tick);
+      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 4000);
+      const j = await (await fetch(n.meteredUrl, { signal: ctl.signal })).json(); clearTimeout(t);
+      const arr = Array.isArray(j) ? j : j.iceServers; if (Array.isArray(arr)) list.push(...arr);
+    } catch(e){}
   }
-  tick();
-  return () => { done = true; };
+  if (n.turnUrl) list.push({ urls: n.turnUrl.split(',').map(x => x.trim()).filter(Boolean), username: n.turnUser || '', credential: n.turnPass || '' });
+  return list;
+}
+async function routeLabel(){
+  try {
+    const st = await pc.getStats(); let pair = null, locals = {};
+    st.forEach(r => { if (r.type === 'transport' && r.selectedCandidatePairId) pair = st.get(r.selectedCandidatePairId); if (r.type === 'local-candidate') locals[r.id] = r; });
+    if (!pair) st.forEach(r => { if (r.type === 'candidate-pair' && r.state === 'succeeded' && (r.nominated || r.selected)) pair = r; });
+    const t = pair && locals[pair.localCandidateId] && locals[pair.localCandidateId].candidateType;
+    return t === 'relay' ? 'Paired · via relay' : (t === 'srflx' || t === 'prflx') ? 'Paired · via internet' : 'Paired · same network';
+  } catch(e){ return 'Paired'; }
+}
+function shareCode(text, label){
+  if (navigator.share) navigator.share({ text: `${label}\n${text}` }).catch(() => {});
 }
 
 /* ---------- connection ---------- */
 let pc = null, dc = null, role = null, session = 0, goneShown = false;
-function newPeer(){
-  const me = pc = new RTCPeerConnection({ iceServers: [] }); // local network only, no internet servers
+async function newPeer(){
+  const me = pc = new RTCPeerConnection({ iceServers: await iceServers() });
   me.addEventListener('connectionstatechange', () => {
     if (me === pc && ['failed','disconnected','closed'].includes(me.connectionState)) peerGone();
   });
 }
 function wireChannel(ch, onOpen){
   dc = ch; dc.binaryType = 'arraybuffer';
-  ch.onopen = () => { setLink(true, 'Paired · local Wi-Fi'); stopCamera(); onOpen(); };
+  ch.onopen = async () => { setLink(true, 'Paired'); stopCamera(); onOpen(); setLink(true, await routeLabel()); };
   ch.onclose = () => { if (ch === dc) peerGone(); };
 }
 function peerGone(){
@@ -251,6 +346,7 @@ function resetAll(){
   const oldDc = dc, oldPc = pc; dc = null; pc = null;
   try { if (oldDc) { oldDc.onclose = null; oldDc.onmessage = null; oldDc.close(); } } catch(e){}
   try { if (oldPc) oldPc.close(); } catch(e){}
+  if (scanStop) scanStop();
   stopCamera();
   window.removeEventListener('deviceorientation', onOrient);
   role = null; goneShown = false;
@@ -273,95 +369,152 @@ const mbps = r => (r / 1048576).toFixed(1) + ' MB/s';
 /* ---------- home ---------- */
 function home(){
   stopCamera(); setLink(false, 'Not paired'); $('#exit').hidden = true;
+  view.className = 'home';
+  const n = loadNet();
   view.innerHTML = `
     <h1>Pour files from one phone into another.</h1>
-    <p>Both phones join the same Wi-Fi or one phone's hotspot. No internet is used for the transfer.</p>
+    <p>Works on the same Wi-Fi or a hotspot with no internet, and across different Wi-Fi networks or mobile data when both phones are online.</p>
     <div class="roles">
       <button class="role jug" id="pickJug">${JUG_SVG}<b>Jug</b><small>I'm sending. Fill the jug with files, then tilt to pour.</small></button>
       <button class="role cont" id="pickCont">${CONT_SVG}<b>Container</b><small>I'm receiving. Hold the phone upright and catch the files.</small></button>
     </div>
     <ol class="steps">
-      <li>Jug shows a pairing code. Container scans it.</li>
+      <li>Jug shows a pairing code. Container scans it, or opens the shared link.</li>
       <li>Container shows a reply code. Jug scans it.</li>
       <li>Fill the jug and tilt past 40°. Files slide across in order.</li>
-    </ol>`;
+    </ol>
+    <details class="card" id="netCard">
+      <summary>Different networks or mobile data <span class="tag ${hasRelay() ? 'on' : ''}" id="relayTag">${hasRelay() ? 'relay on' : 'relay off'}</span></summary>
+      <div class="net">
+        <p class="note">Most phones on different networks connect directly. Some mobile carriers block direct connections; for those, add a relay server here. Only one of the two phones needs it.</p>
+        <label>Metered credentials URL (free account at metered.ca)
+          <input id="mUrl" placeholder="https://yourapp.metered.live/api/v1/turn/credentials?apiKey=…" value="${esc(n.meteredUrl || '')}"></label>
+        <p class="note">Or enter any TURN server:</p>
+        <label>TURN URL <input id="tUrl" placeholder="turn:relay.example.com:443?transport=tcp" value="${esc(n.turnUrl || '')}"></label>
+        <div class="row">
+          <label style="flex:1 1 140px">Username <input id="tUser" value="${esc(n.turnUser || '')}"></label>
+          <label style="flex:1 1 140px">Password <input id="tPass" type="password" value="${esc(n.turnPass || '')}"></label>
+        </div>
+        <div class="row"><button class="btn ghost" id="netSave">Save relay settings</button><button class="btn ghost" id="netClear">Clear</button></div>
+        <div class="note" id="netMsg"></div>
+      </div>
+    </details>`;
   $('#pickJug').onclick = jugPair;
-  $('#pickCont').onclick = contPair;
+  $('#pickCont').onclick = () => contPair();
+  const tag = () => { const on = hasRelay(); $('#relayTag').textContent = on ? 'relay on' : 'relay off'; $('#relayTag').classList.toggle('on', on); };
+  $('#netSave').onclick = async () => {
+    const v = { meteredUrl: $('#mUrl').value.trim(), turnUrl: $('#tUrl').value.trim(), turnUser: $('#tUser').value.trim(), turnPass: $('#tPass').value };
+    if (!saveNet(v)) { $('#netMsg').textContent = 'This browser blocked saving settings. Turn off private browsing and try again.'; return; }
+    tag();
+    if (v.meteredUrl) {
+      $('#netMsg').textContent = 'Checking the relay…';
+      try { const j = await (await fetch(v.meteredUrl)).json(); const a = Array.isArray(j) ? j : j.iceServers;
+        $('#netMsg').textContent = Array.isArray(a) && a.length ? `Saved. Relay found with ${a.length} server addresses.` : 'Saved, but that URL did not return relay servers. Check the API key.'; }
+      catch(e){ $('#netMsg').textContent = 'Saved, but the relay could not be reached. Check the URL and your internet connection.'; }
+    } else $('#netMsg').textContent = v.turnUrl ? 'Saved.' : 'Saved. No relay set.';
+  };
+  $('#netClear').onclick = () => { saveNet({}); ['#mUrl','#tUrl','#tUser','#tPass'].forEach(k => $(k).value = ''); tag(); $('#netMsg').textContent = 'Relay settings cleared.'; };
 }
 
 /* ---------- JUG: pairing ---------- */
 async function jugPair(){
   role = 'jug'; $('#exit').hidden = false;
-  view.innerHTML = `<div class="card"><h2>Step 1 · Show this to the Container</h2><p>Preparing a pairing code…</p></div>`;
-  try { await warmCamera(); } catch(e) { /* scanning can fall back to pasting codes */ }
-  newPeer();
+  view.className = 'pair';
+  view.innerHTML = `<div class="card"><h2>Preparing a pairing code…</h2><p>This takes a few seconds while Pourr finds the best route between the phones.</p></div>`;
+  const my = session;
+  try { await warmCamera(); } catch(e) { /* pairing still works; scanning may be blocked */ }
+  await newPeer();
+  if (my !== session) return;
   wireChannel(pc.createDataChannel('pour', { ordered: true }), jugStage);
   await pc.setLocalDescription(await pc.createOffer());
   await waitIce(pc);
+  stopCamera();                                        // release it; the scanner opens a fresh camera later
+  if (my !== session) return;
   const code = await pack(pc.localDescription);
+  const link = location.origin + location.pathname + '#o=' + code;
   view.innerHTML = `
     <div class="card">
       <h2>Step 1 · Container scans this</h2>
       <div class="qr"><img alt="Pairing code" src="${qrImg(code)}"></div>
-      <details><summary>Can't scan? Copy the code instead</summary><textarea id="myCode" readonly>${code}</textarea><button class="btn ghost" id="copy" style="margin-top:8px">Copy code</button></details>
+      <div class="row">${navigator.share ? '<button class="btn ghost" id="shareLink">Share link</button>' : ''}<button class="btn ghost" id="copy">Copy code</button></div>
+      <p class="note">Far apart? Share the link through any chat app and open it on the receiving phone.</p>
+      <textarea id="myCode" readonly hidden>${code}</textarea>
     </div>
     <div class="card">
       <h2>Step 2 · Scan the Container's reply</h2>
-      <div class="row"><button class="btn clay" id="scanReply">Scan reply code</button></div>
-      <div class="cam" id="cam" hidden></div>
+      <button class="btn clay" id="scanReply">Scan reply code</button>
       <details><summary>Paste the reply code instead</summary><textarea id="paste" placeholder="Paste reply code"></textarea><button class="btn ghost" id="usePaste" style="margin-top:8px">Connect</button></details>
-      <div class="err" id="err"></div>
+      <div class="err" id="err" aria-live="polite"></div>
     </div>
     <button class="btn ghost" id="back">Back</button>`;
   $('#back').onclick = exitToHome;
-  $('#copy').onclick = () => copyText(code, $('#myCode'));
+  $('#copy').onclick = () => { copyText(code, $('#myCode')); $('#copy').textContent = 'Copied'; };
+  if ($('#shareLink')) $('#shareLink').onclick = () => shareCode(link, 'Open this link to receive files with Pourr:');
+  let timer = null;
   const accept = async (c) => {
-    try { const d = await unpack(c); if (d.type !== 'answer') throw new Error('Scan the code from the Container phone.'); await pc.setRemoteDescription(d); $('#err').textContent = 'Connecting…'; }
-    catch(e){ $('#err').textContent = e.message || 'That code did not work. Try again.'; }
+    try {
+      const d = await unpack(c); if (d.type !== 'answer') throw new Error('That is a pairing code. Scan the reply code from the Container phone.');
+      await pc.setRemoteDescription(d); $('#err').textContent = 'Connecting…';
+      clearTimeout(timer);
+      timer = setTimeout(() => { if (my === session && (!dc || dc.readyState !== 'open')) $('#err').textContent = hasRelay()
+        ? 'Still connecting. Check both phones are online, then go back and pair again.'
+        : 'Still connecting. If the phones are on different networks or mobile data, add a relay on the home screen and pair again.'; }, 15000);
+    } catch(e){ $('#err').textContent = e.message || 'That code did not work. Try again.'; }
   };
-  $('#scanReply').onclick = async () => { const cam = $('#cam'); cam.hidden = false; try { await scanInto(cam, c => { cam.hidden = true; accept(c); }); } catch(e){ cam.hidden = true; $('#err').textContent = 'Camera unavailable. Paste the reply code instead.'; } };
+  $('#scanReply').onclick = () => scanButton($('#err'), accept);
   $('#usePaste').onclick = () => accept($('#paste').value);
 }
 
 /* ---------- CONTAINER: pairing ---------- */
-async function contPair(){
+async function contPair(preset){
   role = 'container'; $('#exit').hidden = false;
+  view.className = 'pair';
   view.innerHTML = `
     <div class="card">
       <h2>Step 1 · Scan the Jug's code</h2>
-      <div class="row"><button class="btn water" id="scan">Scan pairing code</button></div>
-      <div class="cam" id="cam" hidden></div>
-      <details><summary>Paste the code instead</summary><textarea id="paste" placeholder="Paste pairing code"></textarea><button class="btn ghost" id="usePaste" style="margin-top:8px">Continue</button></details>
-      <div class="err" id="err"></div>
+      <button class="btn water" id="scan">Scan pairing code</button>
+      <details><summary>Paste the code or link instead</summary><textarea id="paste" placeholder="Paste pairing code or link"></textarea><button class="btn ghost" id="usePaste" style="margin-top:8px">Continue</button></details>
+      <div class="err" id="err" aria-live="polite"></div>
     </div>
     <button class="btn ghost" id="back">Back</button>`;
   $('#back').onclick = exitToHome;
+  const my = session;
   const accept = async (c) => {
     try {
-      const d = await unpack(c); if (d.type !== 'offer') throw new Error('Scan the code from the Jug phone.');
-      newPeer();
+      const d = await unpack(c); if (d.type !== 'offer') throw new Error('That is a reply code. Scan the pairing code from the Jug phone.');
+      $('#err').textContent = 'Preparing your reply code…';
+      await newPeer();
+      if (my !== session) return;
       pc.ondatachannel = e => wireChannel(e.channel, contStage);
       await pc.setRemoteDescription(d);
       await pc.setLocalDescription(await pc.createAnswer());
       await waitIce(pc);
+      if (my !== session) return;
       const code = await pack(pc.localDescription);
       view.innerHTML = `
         <div class="card">
           <h2>Step 2 · Jug scans this reply</h2>
           <div class="qr"><img alt="Reply code" src="${qrImg(code)}"></div>
-          <p class="note">This screen switches to the container as soon as the phones connect.</p>
-          <details><summary>Can't scan? Copy the code instead</summary><textarea id="myCode" readonly>${code}</textarea><button class="btn ghost" id="copy" style="margin-top:8px">Copy code</button></details>
+          <div class="row">${navigator.share ? '<button class="btn ghost" id="shareCode">Share code</button>' : ''}<button class="btn ghost" id="copy">Copy code</button></div>
+          <p class="note">This screen switches to the container as soon as the phones connect. Far apart? Share the code and paste it on the Jug phone.</p>
+          <textarea id="myCode" readonly hidden>${code}</textarea>
         </div>
         <button class="btn ghost" id="back2">Start over</button>`;
-      $('#copy').onclick = () => copyText(code, $('#myCode'));
+      $('#copy').onclick = () => { copyText(code, $('#myCode')); $('#copy').textContent = 'Copied'; };
+      if ($('#shareCode')) $('#shareCode').onclick = () => shareCode(code, 'Pourr reply code. Paste it on the Jug phone:');
       $('#back2').onclick = exitToHome;
-    } catch(e){ $('#err').textContent = e.message || 'That code did not work. Try again.'; }
+    } catch(e){ if ($('#err')) $('#err').textContent = e.message || 'That code did not work. Try again.'; }
   };
-  $('#scan').onclick = async () => { const cam = $('#cam'); cam.hidden = false; try { await scanInto(cam, c => { cam.hidden = true; stopCamera(); accept(c); }); } catch(e){ cam.hidden = true; $('#err').textContent = 'Camera unavailable. Paste the code instead.'; } };
+  $('#scan').onclick = () => scanButton($('#err'), accept);
   $('#usePaste').onclick = () => accept($('#paste').value);
+  if (preset) accept(preset);
 }
 
-function copyText(t, ta){ navigator.clipboard?.writeText(t).catch(() => { ta.select(); document.execCommand('copy'); }); }
+function copyText(t, ta){
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).catch(() => fallbackCopy(ta));
+  else fallbackCopy(ta);
+}
+function fallbackCopy(ta){ ta.hidden = false; ta.select(); try { document.execCommand('copy'); } catch(e){} }
 
 /* ---------- tilt sensing ---------- */
 const POUR_ANGLE = 40;
@@ -388,6 +541,7 @@ const CHUNK_DEFAULT = 64 * 1024;
 function chunkSize(){ const m = pc?.sctp?.maxMessageSize; return Math.max(16384, Math.min(m && isFinite(m) ? m : CHUNK_DEFAULT, 256 * 1024)); }
 
 function jugStage(){
+  view.className = 'work';
   view.innerHTML = `
     <div class="stage">
       <div class="tilt-read" id="tiltRead">tilt 0°</div>
@@ -515,6 +669,7 @@ async function pourQueue(){
 /* ---------- CONTAINER stage: catch + save ---------- */
 let received = [], current = null, rx = null, rxTick = null, uiPending = false;
 function contStage(){
+  view.className = 'work';
   view.innerHTML = `
     <div class="stage">
       <div class="tilt-read">holding upright</div>
@@ -591,6 +746,7 @@ function finishRx(count){
   const sp = $('#speed'); if (sp) sp.textContent = '';
   $('#fill').style.height = '92%';
   setStatus(`Complete · ${count} of ${count} received`, true);
+  $('#gauge').textContent = `${received.length} file${received.length>1?'s':''} ready to save`;
   showSaveCard();
 }
 function showSaveCard(){
@@ -669,7 +825,10 @@ function clearReceived(){
 /* ---------- boot ---------- */
 if (!window.RTCPeerConnection) {
   view.innerHTML = `<h1>This browser can't pair phones.</h1><p>Open this page in Chrome, Safari or Firefox on a phone.</p>`;
-} else home();
+} else {
+  const m = location.hash.match(/^#o=(.+)$/);
+  if (m) { history.replaceState(null, '', location.pathname); contPair(m[1]); } else home();
+}
 try { navigator.wakeLock?.request('screen').catch(()=>{}); } catch(e){}
 </script>
 </body>
