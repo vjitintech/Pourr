@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pourr Privacy Policy</title>
+<style>
+:root{--bg:#eaf1f4;--surface:#fff;--fg:#0e2230;--muted:#5b7182;--line:#cfdde5;--water:#1683c4;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#0b1720;--surface:#132430;--fg:#e4eef4;--muted:#8aa2b2;--line:#22394a;--water:#3aa6e6;color-scheme:dark}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 "IBM Plex Sans","Segoe UI",system-ui,sans-serif;
+  padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+main{max-width:680px;margin:0 auto}
+h1{font:800 32px/1.1 "Bricolage Grotesque","Segoe UI",system-ui,sans-serif;margin:0 0 4px}
+h2{font-size:18px;margin:28px 0 6px}
+p,li{color:var(--fg)}
+.muted{color:var(--muted)}
+a{color:var(--water)}
+</style>
+</head>
+<body>
+<main>
+  <p><a href="./">← Back to Pourr</a></p>
+  <h1>Privacy Policy</h1>
+  <p class="muted">Last updated: 27 October 2026</p>
+
+  <h2>Your files</h2>
+  <p>Pourr sends files directly from one device to the other. Files are encrypted in transit by your browser (WebRTC uses DTLS encryption) and are never uploaded to or stored on our servers.</p>
+  <p>When two devices cannot reach each other directly, the encrypted data may pass through a relay server run by Cloudflare. The relay forwards encrypted data and cannot read your files.</p>
+
+  <h2>Pairing</h2>
+  <p>Pairing codes and links contain network addresses the two devices need to find each other. They are shared only between the two devices, by QR code or by a link you choose to send.</p>
+
+  <h2>Camera and motion sensors</h2>
+  <p>The camera is used only to scan pairing QR codes, and the motion sensor only to detect the pouring tilt. Neither is recorded or sent anywhere.</p>
+
+  <h2>Advertising</h2>
+  <p>Pourr is free and is supported by ads served by Google AdSense. Google and its partners may use cookies to serve ads based on your visits to this and other websites. You can turn off personalised ads at <a href="https://adssettings.google.com" target="_blank" rel="noopener">Google Ad Settings</a>. Learn more at <a href="https://policies.google.com/technologies/ads" target="_blank" rel="noopener">How Google uses information from sites that use its services</a>.</p>
+
+  <h2>Settings stored on your device</h2>
+  <p>If you add your own relay server, those settings are saved only in your browser on that device.</p>
+
+  <h2>Contact</h2>
+  <p>Questions about this policy: open an issue at <a href="https://github.com/vjitintech/Pourr/issues" target="_blank" rel="noopener">github.com/vjitintech/Pourr</a>.</p>
+</main>
+</body>
+</html>

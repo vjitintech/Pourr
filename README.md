@@ -16,10 +16,14 @@ Sharing files should feel as natural as pouring water from a jug into a glass. W
 ## Requirements
 
 - **Same Wi-Fi or hotspot:** works with no internet at all.
-- **Different Wi-Fi networks or mobile data:** both phones need internet. Most connect directly; some mobile carriers block direct connections, so add a free relay (TURN) server under "Different networks or mobile data" on the home screen. A free Metered account (metered.ca) gives 20 GB of relay traffic per month.
+- **Different Wi-Fi networks or mobile data:** both phones need internet. Pourr connects directly when it can, and falls back to a free built-in relay when a network blocks that. Users never pay or set anything up.
 - **Far apart:** the Jug can share a pairing link through any chat app, and the Container shares its reply code back.
 - Open the page over HTTPS (GitHub Pages does this) so the camera and tilt sensor work.
 - On iPhone, allow camera and motion access when asked.
+
+## Free for users, funded by ads
+
+Pourr is free to use. The relay runs on Cloudflare's free tier (1,000 GB a month) and the app shows a small ad on the home screen and after a pour. Owner setup steps are in [SETUP.md](SETUP.md).
 
 ## Test on one computer
 
@@ -27,4 +31,4 @@ Open the page in two browser tabs, choose Jug in one and Container in the other,
 
 ## How it's built
 
-A single `index.html` with no build step. Phones connect directly using WebRTC data channels, paired by QR code or shared link with no signaling server. Public STUN servers find a route across networks, and an optional TURN relay covers networks that block direct connections. Files are read in large slices and sent as ordered chunks with flow control, and the receiver rebuilds each file as it arrives.
+A single `index.html` with no build step. Phones connect directly using WebRTC data channels, paired by QR code or shared link with no signaling server. Public STUN servers find a route across networks, and a Cloudflare TURN relay, issued with short-lived credentials by the Worker in `relay/`, covers networks that block direct connections. Files are read in large slices and sent as ordered chunks with flow control, and the receiver rebuilds each file as it arrives.

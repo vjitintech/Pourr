@@ -1,0 +1,9 @@
+name = "pourr-relay"
+main = "worker.js"
+compatibility_date = "2026-01-15"
+
+[vars]
+ALLOWED_ORIGINS = "https://vjitintech.github.io"
+# TURN_KEY_ID and TURN_KEY_API_TOKEN are set as secrets:
+#   npx wrangler secret put TURN_KEY_ID
+#   npx wrangler secret put TURN_KEY_API_TOKEN

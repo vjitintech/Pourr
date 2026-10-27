@@ -133,6 +133,12 @@ main.work .dock{max-height:46dvh;overflow-y:auto;width:100%;max-width:560px;just
 .scanner p{color:#d7e6ee;text-align:center}
 .scanner .btn.ghost{color:#fff;border-color:rgba(255,255,255,.4);min-width:160px}
 details.card{display:block}
+.netline{display:flex;flex-wrap:wrap;gap:6px}
+.netline .tag{white-space:normal;line-height:1.3}
+.ad{display:flex;flex-direction:column;gap:4px;min-height:60px;border-top:1px solid var(--line);padding-top:8px;overflow:hidden}
+.ad-label{font:500 10px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.foot{text-align:center;padding-bottom:4px}
+.foot a{color:var(--water)}
 details.card summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px;color:var(--fg);font-weight:500}
 .net{display:grid;gap:8px;margin-top:10px}
 .net label{font-size:13px;color:var(--muted);display:grid;gap:4px}
@@ -264,24 +270,65 @@ async function scanButton(errEl, onCode){
   catch(e){ errEl.textContent = camError(e); }
 }
 
-/* ---------- network settings: STUN always, optional TURN relay for strict mobile networks ---------- */
-const STUN = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
+/* ---------- app owner settings: fill these in once (see SETUP.md) ---------- */
+const CONFIG = {
+  // Your Cloudflare Worker address from relay/worker.js, e.g. 'https://pourr-relay.yourname.workers.dev/ice'
+  relayEndpoint: '',
+  // Google AdSense publisher ID, e.g. 'ca-pub-1234567890123456'. Leave empty to show no ads.
+  adClient: '',
+  // AdSense ad unit IDs for each placement.
+  adSlots: { home: '', done: '' },
+};
+
+/* ---------- network: direct routes first, free relay only when a network blocks them ---------- */
+const STUN = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
 function loadNet(){ try { return JSON.parse(localStorage.getItem('pourr.net') || '{}'); } catch(e){ return {}; } }
 function saveNet(n){ try { localStorage.setItem('pourr.net', JSON.stringify(n)); return true; } catch(e){ return false; } }
-const hasRelay = () => { const n = loadNet(); return !!(n.meteredUrl || n.turnUrl); };
+const hasOwnRelay = () => { const n = loadNet(); return !!(n.meteredUrl || n.turnUrl); };
+const hasRelay = () => !!CONFIG.relayEndpoint || hasOwnRelay();
+let relayCache = null;                                // { servers, until }
+async function fetchJSON(url, ms){
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
+  try { const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' }); if (!r.ok) throw new Error(r.status); return await r.json(); }
+  finally { clearTimeout(t); }
+}
+async function builtInRelay(){
+  if (!CONFIG.relayEndpoint) return [];
+  if (relayCache && relayCache.until > Date.now()) return relayCache.servers;
+  try {
+    const j = await fetchJSON(CONFIG.relayEndpoint, 3000);
+    const servers = (Array.isArray(j) ? j : j.iceServers || []).filter(Boolean);
+    relayCache = { servers, until: Date.now() + Math.max(60, (j.ttl || 3600) - 600) * 1000 };
+    return servers;
+  } catch(e){ return []; }
+}
 async function iceServers(){
   if (navigator.onLine === false) return [];           // offline: same Wi-Fi or hotspot only
   const n = loadNet(), list = [...STUN];
-  if (n.meteredUrl) {
-    try {
-      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 4000);
-      const j = await (await fetch(n.meteredUrl, { signal: ctl.signal })).json(); clearTimeout(t);
-      const arr = Array.isArray(j) ? j : j.iceServers; if (Array.isArray(arr)) list.push(...arr);
-    } catch(e){}
-  }
+  // The browser always tries same-network and direct internet routes first.
+  // Relay addresses are only used when neither works, so relay traffic stays small.
+  list.push(...await builtInRelay());
+  if (n.meteredUrl) { try { const j = await fetchJSON(n.meteredUrl, 4000); const arr = Array.isArray(j) ? j : j.iceServers; if (Array.isArray(arr)) list.push(...arr); } catch(e){} }
   if (n.turnUrl) list.push({ urls: n.turnUrl.split(',').map(x => x.trim()).filter(Boolean), username: n.turnUser || '', credential: n.turnPass || '' });
   return list;
 }
+if (navigator.onLine !== false) builtInRelay();       // warm up so pairing doesn't wait
+
+/* ---------- ads: only on calm screens, never near the tilt area ---------- */
+let adsLoaded = false;
+function placeAd(host, slot){
+  if (!host || !CONFIG.adClient || !slot) return;
+  if (!adsLoaded) {
+    adsLoaded = true;
+    const sc = document.createElement('script');
+    sc.async = true; sc.crossOrigin = 'anonymous';
+    sc.src = 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=' + encodeURIComponent(CONFIG.adClient);
+    document.head.appendChild(sc);
+  }
+  host.innerHTML = `<div class="ad"><span class="ad-label">Advertisement</span><ins class="adsbygoogle" style="display:block" data-ad-client="${esc(CONFIG.adClient)}" data-ad-slot="${esc(slot)}" data-ad-format="auto" data-full-width-responsive="true"></ins></div>`;
+  try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch(e){}
+}
+
 async function routeLabel(){
   try {
     const st = await pc.getStats(); let pair = null, locals = {};
@@ -383,12 +430,16 @@ function home(){
       <li>Container shows a reply code. Jug scans it.</li>
       <li>Fill the jug and tilt past 40°. Files slide across in order.</li>
     </ol>
+    <div class="netline">
+      <span class="tag on">Same network · no internet needed</span>
+      <span class="tag ${hasRelay() ? 'on' : ''}" id="relayTag">${CONFIG.relayEndpoint ? 'Different networks · free relay built in' : hasOwnRelay() ? 'Different networks · your relay' : 'Different networks · direct only'}</span>
+    </div>
     <details class="card" id="netCard">
-      <summary>Different networks or mobile data <span class="tag ${hasRelay() ? 'on' : ''}" id="relayTag">${hasRelay() ? 'relay on' : 'relay off'}</span></summary>
+      <summary>Advanced: use my own relay server</summary>
       <div class="net">
-        <p class="note">Most phones on different networks connect directly. Some mobile carriers block direct connections; for those, add a relay server here. Only one of the two phones needs it.</p>
-        <label>Metered credentials URL (free account at metered.ca)
-          <input id="mUrl" placeholder="https://yourapp.metered.live/api/v1/turn/credentials?apiKey=…" value="${esc(n.meteredUrl || '')}"></label>
+        <p class="note">${CONFIG.relayEndpoint ? 'Pourr already includes a free relay. You only need this to use a relay of your own.' : 'Most phones on different networks connect directly. Some mobile carriers block that; a relay server fixes it. Only one phone needs this.'}</p>
+        <label>Credentials URL (returns ICE servers)
+          <input id="mUrl" placeholder="https://…/api/v1/turn/credentials?apiKey=…" value="${esc(n.meteredUrl || '')}"></label>
         <p class="note">Or enter any TURN server:</p>
         <label>TURN URL <input id="tUrl" placeholder="turn:relay.example.com:443?transport=tcp" value="${esc(n.turnUrl || '')}"></label>
         <div class="row">
@@ -398,10 +449,13 @@ function home(){
         <div class="row"><button class="btn ghost" id="netSave">Save relay settings</button><button class="btn ghost" id="netClear">Clear</button></div>
         <div class="note" id="netMsg"></div>
       </div>
-    </details>`;
+    </details>
+    <div id="adHome"></div>
+    <p class="note foot"><a href="privacy.html">Privacy</a> · Free, supported by ads. Your files never touch our servers.</p>`;
+  placeAd($('#adHome'), CONFIG.adSlots.home);
   $('#pickJug').onclick = jugPair;
   $('#pickCont').onclick = () => contPair();
-  const tag = () => { const on = hasRelay(); $('#relayTag').textContent = on ? 'relay on' : 'relay off'; $('#relayTag').classList.toggle('on', on); };
+  const tag = () => { const on = hasRelay(); $('#relayTag').textContent = CONFIG.relayEndpoint ? 'Different networks · free relay built in' : on ? 'Different networks · your relay' : 'Different networks · direct only'; $('#relayTag').classList.toggle('on', on); };
   $('#netSave').onclick = async () => {
     const v = { meteredUrl: $('#mUrl').value.trim(), turnUrl: $('#tUrl').value.trim(), turnUser: $('#tUser').value.trim(), turnPass: $('#tPass').value };
     if (!saveNet(v)) { $('#netMsg').textContent = 'This browser blocked saving settings. Turn off private browsing and try again.'; return; }
@@ -409,7 +463,7 @@ function home(){
     if (v.meteredUrl) {
       $('#netMsg').textContent = 'Checking the relay…';
       try { const j = await (await fetch(v.meteredUrl)).json(); const a = Array.isArray(j) ? j : j.iceServers;
-        $('#netMsg').textContent = Array.isArray(a) && a.length ? `Saved. Relay found with ${a.length} server addresses.` : 'Saved, but that URL did not return relay servers. Check the API key.'; }
+        $('#netMsg').textContent = Array.isArray(a) && a.length ? `Saved. Relay found with ${a.length} server addresses.` : 'Saved, but that URL did not return relay servers. Check the key in the URL.'; }
       catch(e){ $('#netMsg').textContent = 'Saved, but the relay could not be reached. Check the URL and your internet connection.'; }
     } else $('#netMsg').textContent = v.turnUrl ? 'Saved.' : 'Saved. No relay set.';
   };
@@ -458,7 +512,7 @@ async function jugPair(){
       clearTimeout(timer);
       timer = setTimeout(() => { if (my === session && (!dc || dc.readyState !== 'open')) $('#err').textContent = hasRelay()
         ? 'Still connecting. Check both phones are online, then go back and pair again.'
-        : 'Still connecting. If the phones are on different networks or mobile data, add a relay on the home screen and pair again.'; }, 15000);
+        : 'Still connecting. These networks block direct connections. Put both phones on the same Wi-Fi, or turn on a hotspot on one phone and join it from the other.'; }, 15000);
     } catch(e){ $('#err').textContent = e.message || 'That code did not work. Try again.'; }
   };
   $('#scanReply').onclick = () => scanButton($('#err'), accept);
@@ -658,6 +712,7 @@ async function pourQueue(){
     }
     ch.send(JSON.stringify({ t: 'done', count: idx }));
     setStatus(`Complete · ${idx} of ${idx} poured. The jug is empty.`, true);
+    if (!$('#adDone')) { const d = document.createElement('div'); d.id = 'adDone'; $('#dock').appendChild(d); placeAd(d, CONFIG.adSlots.done); }
     if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
   } catch(e) { if (my === session) setStatus('Pour stopped: the connection dropped.'); }
   finally {
@@ -770,7 +825,9 @@ function showSaveCard(){
         <button class="btn ghost" id="discard">Discard</button>
       </div>
       <div class="saved-list" id="list"></div>
-    </div>`;
+    </div>
+    <div id="adDone"></div>`;
+  placeAd($('#adDone'), CONFIG.adSlots.done);
   if (canDir) $('#saveDir').onclick = saveToFolder;
   if (canShare) $('#saveShare').onclick = saveViaShare;
   $('#saveDl').onclick = saveDownloads;
