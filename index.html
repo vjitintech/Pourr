@@ -25,6 +25,7 @@
   color-scheme:dark;
 }}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--fg);font:15px/1.5 var(--body);
   padding:env(safe-area-inset-top,0px) max(16px,env(safe-area-inset-right,0px)) env(safe-area-inset-bottom,0px) max(16px,env(safe-area-inset-left,0px));
@@ -95,6 +96,15 @@ details[open] summary{margin-bottom:8px}
 .empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:var(--muted);font-size:13px;padding:20%;z-index:1;pointer-events:none}
 .saved-list{display:grid;gap:6px;max-height:30vh;overflow:auto}
 .saved-list a{color:var(--water);font-size:14px;word-break:break-all}
+.hdr-right{display:flex;gap:8px;align-items:center;min-width:0}
+.btn.small{min-height:34px;padding:8px 12px;font-size:13px;border-radius:999px}
+.btn.small.armed{border-color:var(--warn);color:var(--warn)}
+.tile .cnt{position:absolute;top:-7px;right:6px;font:600 10px/1 var(--mono);background:var(--water);color:#fff;border-radius:999px;padding:3px 6px;font-variant-numeric:tabular-nums}
+.tile.done .cnt{background:var(--ok)}
+.status{font:600 14px/1.3 var(--body);color:var(--fg);text-align:center;font-variant-numeric:tabular-nums}
+.status.ok{color:var(--ok)}
+.banner{display:flex;flex-direction:column;gap:10px;align-items:stretch}
+.save-opts{display:grid;gap:8px}
 @media (prefers-reduced-motion:reduce){.tile.leaving,.tile.arriving,.waterfill::before{animation:none}.vessel{transition:none}}
 </style>
 </head>
@@ -102,7 +112,10 @@ details[open] summary{margin-bottom:8px}
 <div class="app">
   <header>
     <div class="brand">Pourr<span>.</span></div>
-    <div class="pill" id="link"><i></i><span id="linkText">Not paired</span></div>
+    <div class="hdr-right">
+      <div class="pill" id="link"><i></i><span id="linkText">Not paired</span></div>
+      <button class="btn ghost small" id="exit" hidden>Exit</button>
+    </div>
   </header>
   <main id="view"></main>
 </div>
@@ -188,22 +201,78 @@ async function scanInto(box, onCode){
 }
 
 /* ---------- connection ---------- */
-let pc = null, dc = null, role = null;
+let pc = null, dc = null, role = null, session = 0, goneShown = false;
 function newPeer(){
-  pc = new RTCPeerConnection({ iceServers: [] }); // local network only, no internet servers
-  pc.addEventListener('connectionstatechange', () => {
-    if (['failed','disconnected','closed'].includes(pc.connectionState)) setLink(false, 'Disconnected');
+  const me = pc = new RTCPeerConnection({ iceServers: [] }); // local network only, no internet servers
+  me.addEventListener('connectionstatechange', () => {
+    if (me === pc && ['failed','disconnected','closed'].includes(me.connectionState)) peerGone();
   });
 }
 function wireChannel(ch, onOpen){
   dc = ch; dc.binaryType = 'arraybuffer';
-  dc.onopen = () => { setLink(true, 'Paired · local Wi-Fi'); stopCamera(); onOpen(); };
-  dc.onclose = () => setLink(false, 'Disconnected');
+  ch.onopen = () => { setLink(true, 'Paired · local Wi-Fi'); stopCamera(); onOpen(); };
+  ch.onclose = () => { if (ch === dc) peerGone(); };
+}
+function peerGone(){
+  if (!role || goneShown || !dc) return;
+  goneShown = true;
+  setLink(false, 'Disconnected');
+  pouring = false;
+  const keep = role === 'container' && received.length;
+  const html = `<div class="card banner" id="goneCard"><h2>The other phone disconnected</h2>
+    <p>${keep ? 'Your received files are still here. Save them before you leave.' : 'Pair again to keep pouring.'}</p>
+    <button class="btn${keep ? ' ghost' : ''}" id="goHome">Back to home</button></div>`;
+  const dock = $('#dock');
+  if (dock) dock.insertAdjacentHTML('afterbegin', html); else view.insertAdjacentHTML('afterbegin', html);
+  $('#goHome').onclick = exitToHome;
 }
 
+/* ---------- exit ---------- */
+let exitArm = null;
+$('#exit').onclick = () => {
+  const b = $('#exit');
+  const busy = sending || current !== null;
+  const unsaved = role === 'container' && received.length > 0;
+  if ((busy || unsaved) && !b.classList.contains('armed')) {
+    b.classList.add('armed');
+    b.textContent = busy ? 'Tap again to stop' : 'Unsaved files · tap again';
+    clearTimeout(exitArm);
+    exitArm = setTimeout(() => { b.classList.remove('armed'); b.textContent = 'Exit'; }, 3000);
+    return;
+  }
+  exitToHome();
+};
+function exitToHome(){
+  try { if (dc && dc.readyState === 'open') dc.send(JSON.stringify({ t: 'bye' })); } catch(e){}
+  resetAll(); home();
+}
+function resetAll(){
+  session++;
+  const oldDc = dc, oldPc = pc; dc = null; pc = null;
+  try { if (oldDc) { oldDc.onclose = null; oldDc.onmessage = null; oldDc.close(); } } catch(e){}
+  try { if (oldPc) oldPc.close(); } catch(e){}
+  stopCamera();
+  window.removeEventListener('deviceorientation', onOrient);
+  role = null; goneShown = false;
+  jugFiles = []; pouring = false; sending = false; holdPour = false; tilt = 0; tiltOK = false;
+  resumeWaiters.splice(0).forEach(r => r());
+  received = []; current = null; rx = null; clearInterval(rxTick);
+  const b = $('#exit'); b.classList.remove('armed'); b.textContent = 'Exit'; clearTimeout(exitArm);
+}
+function setStatus(text, ok){ const s = $('#status'); if (s) { s.textContent = text; s.classList.toggle('ok', !!ok); } }
+
+/* rolling speed over the last ~1.5 s, so pauses and earlier pours don't drag the number down */
+function meter(){
+  const s = [];
+  return {
+    add(total){ const t = performance.now(); s.push([t, total]); while (s.length > 2 && t - s[0][0] > 1500) s.shift(); },
+    rate(){ if (s.length < 2) return 0; const a = s[0], b = s[s.length-1], dt = (b[0]-a[0]) / 1000; return dt > 0.15 ? (b[1]-a[1]) / dt : 0; }
+  };
+}
+const mbps = r => (r / 1048576).toFixed(1) + ' MB/s';
 /* ---------- home ---------- */
 function home(){
-  stopCamera(); setLink(false, 'Not paired');
+  stopCamera(); setLink(false, 'Not paired'); $('#exit').hidden = true;
   view.innerHTML = `
     <h1>Pour files from one phone into another.</h1>
     <p>Both phones join the same Wi-Fi or one phone's hotspot. No internet is used for the transfer.</p>
@@ -222,7 +291,7 @@ function home(){
 
 /* ---------- JUG: pairing ---------- */
 async function jugPair(){
-  role = 'jug';
+  role = 'jug'; $('#exit').hidden = false;
   view.innerHTML = `<div class="card"><h2>Step 1 · Show this to the Container</h2><p>Preparing a pairing code…</p></div>`;
   try { await warmCamera(); } catch(e) { /* scanning can fall back to pasting codes */ }
   newPeer();
@@ -244,7 +313,7 @@ async function jugPair(){
       <div class="err" id="err"></div>
     </div>
     <button class="btn ghost" id="back">Back</button>`;
-  $('#back').onclick = () => { pc.close(); home(); };
+  $('#back').onclick = exitToHome;
   $('#copy').onclick = () => copyText(code, $('#myCode'));
   const accept = async (c) => {
     try { const d = await unpack(c); if (d.type !== 'answer') throw new Error('Scan the code from the Container phone.'); await pc.setRemoteDescription(d); $('#err').textContent = 'Connecting…'; }
@@ -256,7 +325,7 @@ async function jugPair(){
 
 /* ---------- CONTAINER: pairing ---------- */
 async function contPair(){
-  role = 'container';
+  role = 'container'; $('#exit').hidden = false;
   view.innerHTML = `
     <div class="card">
       <h2>Step 1 · Scan the Jug's code</h2>
@@ -266,7 +335,7 @@ async function contPair(){
       <div class="err" id="err"></div>
     </div>
     <button class="btn ghost" id="back">Back</button>`;
-  $('#back').onclick = home;
+  $('#back').onclick = exitToHome;
   const accept = async (c) => {
     try {
       const d = await unpack(c); if (d.type !== 'offer') throw new Error('Scan the code from the Jug phone.');
@@ -285,7 +354,7 @@ async function contPair(){
         </div>
         <button class="btn ghost" id="back2">Start over</button>`;
       $('#copy').onclick = () => copyText(code, $('#myCode'));
-      $('#back2').onclick = () => { pc.close(); home(); };
+      $('#back2').onclick = exitToHome;
     } catch(e){ $('#err').textContent = e.message || 'That code did not work. Try again.'; }
   };
   $('#scan').onclick = async () => { const cam = $('#cam'); cam.hidden = false; try { await scanInto(cam, c => { cam.hidden = true; stopCamera(); accept(c); }); } catch(e){ cam.hidden = true; $('#err').textContent = 'Camera unavailable. Paste the code instead.'; } };
@@ -298,10 +367,9 @@ function copyText(t, ta){ navigator.clipboard?.writeText(t).catch(() => { ta.sel
 const POUR_ANGLE = 40;
 let tilt = 0, tiltOK = false, holdPour = false;
 function onOrient(e){
-  // Use whichever axis is tipped further; screen orientation flips gamma's meaning in landscape.
   const g = e.gamma || 0, b = e.beta || 0;
-  const ang = (screen.orientation && Math.abs(screen.orientation.angle) === 90) ? (b) : g;
-  tilt = ang; tiltOK = true;
+  tilt = (screen.orientation && Math.abs(screen.orientation.angle) === 90) ? b : g;
+  tiltOK = true;
 }
 async function enableTilt(){
   try {
@@ -314,7 +382,7 @@ async function enableTilt(){
 }
 
 /* ---------- JUG stage: fill + pour ---------- */
-let jugFiles = [];       // queue, FIFO
+let jugFiles = [];       // queue, first in first out
 let pouring = false, sending = false, resumeWaiters = [];
 const CHUNK_DEFAULT = 64 * 1024;
 function chunkSize(){ const m = pc?.sctp?.maxMessageSize; return Math.max(16384, Math.min(m && isFinite(m) ? m : CHUNK_DEFAULT, 256 * 1024)); }
@@ -334,7 +402,8 @@ function jugStage(){
       </div>
       <div class="gauge" id="gauge"></div>
     </div>
-    <div class="dock">
+    <div class="dock" id="dock">
+      <div class="status" id="status"></div>
       <input type="file" id="pick" multiple hidden>
       <div class="row">
         <button class="btn ghost" id="add">Add files</button>
@@ -342,6 +411,7 @@ function jugStage(){
       </div>
       <button class="btn ghost" id="hold" disabled>Hold here to pour (no tilt sensor)</button>
     </div>`;
+  dc.onmessage = e => { if (typeof e.data === 'string') { try { if (JSON.parse(e.data).t === 'bye') peerGone(); } catch(_){} } };
   $('#add').onclick = () => $('#pick').click();
   $('#pick').onchange = e => { addToJug([...e.target.files]); e.target.value = ''; };
   $('#tiltBtn').onclick = async () => {
@@ -349,19 +419,21 @@ function jugStage(){
     $('#tiltBtn').textContent = ok ? 'Tilt is on · tip to pour' : 'Tilt unavailable · use hold';
     $('#tiltBtn').disabled = true;
     if (!ok) $('#hold').disabled = false;
-    setTimeout(() => { if (!tiltOK) $('#hold').disabled = false; }, 1500);
+    setTimeout(() => { if (!tiltOK && $('#hold')) $('#hold').disabled = false; }, 1500);
   };
   const hold = $('#hold');
   const on = e => { e.preventDefault(); holdPour = true; }, off = () => { holdPour = false; };
   hold.addEventListener('pointerdown', on); hold.addEventListener('pointerup', off); hold.addEventListener('pointerleave', off); hold.addEventListener('pointercancel', off);
   if (!('DeviceOrientationEvent' in window)) hold.disabled = false;
-  renderJug(); requestAnimationFrame(jugLoop);
+  renderJug();
+  const my = session; requestAnimationFrame(() => jugLoop(my));
 }
 function addToJug(files){
   for (const f of files) jugFiles.push({ id: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()), file: f, sent: 0, el: null });
   renderJug();
+  if (!sending) setStatus(jugFiles.length ? `${jugFiles.length} file${jugFiles.length>1?'s':''} in the jug · tilt to pour` : '');
 }
-function tileHTML(name, size){ return `<div class="ext">${esc(extOf(name)).slice(0,4)}</div><div style="min-width:0"><div class="nm">${esc(name)}</div><div class="sz">${fmt(size)}</div></div><div class="bar"><b></b></div>`; }
+function tileHTML(name, size){ return `<span class="cnt" hidden></span><div class="ext">${esc(extOf(name)).slice(0,4)}</div><div style="min-width:0"><div class="nm">${esc(name)}</div><div class="sz">${fmt(size)}</div></div><div class="bar"><b></b></div>`; }
 function renderJug(){
   const inside = $('#inside'); if (!inside) return;
   for (const it of jugFiles) if (!it.el) { it.el = document.createElement('div'); it.el.className = 'tile'; it.el.innerHTML = tileHTML(it.file.name, it.file.size); inside.appendChild(it.el); }
@@ -370,8 +442,8 @@ function renderJug(){
   $('#fill').style.height = jugFiles.length ? Math.max(12, Math.min(92, 18 + jugFiles.length * 9)) * (total ? left/total : 1) + '%' : '0%';
   $('#gauge').textContent = jugFiles.length ? `${jugFiles.length} file${jugFiles.length>1?'s':''} · ${fmt(left)} to pour` : '';
 }
-function jugLoop(){
-  if (role !== 'jug' || !$('#vessel')) return;
+function jugLoop(my){
+  if (my !== session || role !== 'jug' || !$('#vessel')) return;
   const ang = holdPour ? 55 : tilt;
   const vis = Math.max(-75, Math.min(75, ang));
   $('#vessel').style.transform = `rotate(${vis}deg)`;
@@ -381,54 +453,67 @@ function jugLoop(){
     pouring = want;
     document.documentElement.style.setProperty('--dx', (ang < 0 ? '-160%' : '160%'));
     document.documentElement.style.setProperty('--rot', (ang < 0 ? '-35deg' : '35deg'));
-    if (pouring) { resumeWaiters.splice(0).forEach(r => r()); if (!sending) pourQueue(); }
+    if (pouring) resumeWaiters.splice(0).forEach(r => r());
   }
-  requestAnimationFrame(jugLoop);
+  if (pouring && !sending && jugFiles.length) pourQueue();
+  requestAnimationFrame(() => jugLoop(my));
 }
 const waitPour = () => pouring ? Promise.resolve() : new Promise(r => resumeWaiters.push(r));
-function waitDrain(){ return new Promise(r => { if (dc.bufferedAmount < dc.bufferedAmountLowThreshold) return r(); dc.addEventListener('bufferedamountlow', r, { once: true }); }); }
+function waitDrain(ch){ return new Promise(r => { if (ch.bufferedAmount <= ch.bufferedAmountLowThreshold) return r(); ch.addEventListener('bufferedamountlow', r, { once: true }); }); }
 
 async function pourQueue(){
+  const my = session, ch = dc;
   sending = true;
-  const CH = chunkSize(), HIGH = 8 * 1048576;
-  dc.bufferedAmountLowThreshold = 2 * 1048576;
-  const total = jugFiles.reduce((a,b) => a + b.file.size, 0);
-  dc.send(JSON.stringify({ t: 'batch', count: jugFiles.length, total }));
-  let t0 = performance.now(), bytes = 0;
-  const spd = setInterval(() => { const s = (performance.now() - t0) / 1000; if (s > 0.2) $('#speed') && ($('#speed').textContent = (bytes/1048576/s).toFixed(1) + ' MB/s'); }, 400);
+  const CH = chunkSize(), HIGH = 4 * 1048576;
+  ch.bufferedAmountLowThreshold = 1048576;
+  let idx = 0, bytes = 0;
+  const m = meter();
+  const tick = setInterval(() => {
+    m.add(bytes); const r = m.rate(), el = $('#speed');
+    if (el) el.textContent = r > 0 ? mbps(r) : (pouring ? '' : 'paused');
+  }, 250);
+  const live = () => my === session && ch === dc && ch.readyState === 'open';
   try {
+    ch.send(JSON.stringify({ t: 'batch' }));
     while (jugFiles.length) {
-      await waitPour();
-      const it = jugFiles[0], f = it.file;           // first in, first out
-      dc.send(JSON.stringify({ t: 'meta', id: it.id, name: f.name, size: f.size, type: f.type }));
-      it.el.querySelector('.bar b').style.width = '0%';
-      const READ = 4 * 1048576;                       // read big slices, send small chunks
+      await waitPour(); if (!live()) return;
+      const it = jugFiles[0], f = it.file;              // first in, first out
+      idx++;
+      const of = idx - 1 + jugFiles.length;
+      const cnt = it.el.querySelector('.cnt'); cnt.hidden = false; cnt.textContent = `${idx} of ${of}`;
+      setStatus(`Pouring ${idx} of ${of} · ${f.name}`);
+      ch.send(JSON.stringify({ t: 'meta', id: it.id, name: f.name, size: f.size, type: f.type, idx, of }));
+      const READ = 4 * 1048576;                          // read big slices, send small chunks
       for (let off = 0; off < f.size; off += READ) {
         const buf = await f.slice(off, off + READ).arrayBuffer();
         for (let p = 0; p < buf.byteLength; p += CH) {
           if (!pouring) await waitPour();
-          if (dc.bufferedAmount > HIGH) await waitDrain();
-          dc.send(buf.slice(p, p + CH));
+          if (ch.bufferedAmount > HIGH) await waitDrain(ch);
+          if (!live()) return;
+          ch.send(buf.slice(p, p + CH));
           const n = Math.min(CH, buf.byteLength - p); it.sent += n; bytes += n;
         }
         it.el.querySelector('.bar b').style.width = (it.sent / f.size * 100) + '%';
         renderJug();
       }
-      dc.send(JSON.stringify({ t: 'end', id: it.id }));
-      it.el.classList.add('leaving');
+      ch.send(JSON.stringify({ t: 'end', id: it.id }));
+      cnt.textContent = `✓ ${idx} of ${of}`;
+      it.el.classList.add('done', 'leaving');
       const el = it.el; setTimeout(() => el.remove(), 700);
       jugFiles.shift(); renderJug();
     }
-    await waitDrain();
-    dc.send(JSON.stringify({ t: 'done' }));
-    $('#gauge').textContent = 'Jug is empty. All files poured.';
+    ch.send(JSON.stringify({ t: 'done', count: idx }));
+    setStatus(`Complete · ${idx} of ${idx} poured. The jug is empty.`, true);
     if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
-  } catch(e) { $('#gauge').textContent = 'Pour stopped: the connection dropped.'; }
-  finally { clearInterval(spd); sending = false; }
+  } catch(e) { if (my === session) setStatus('Pour stopped: the connection dropped.'); }
+  finally {
+    clearInterval(tick);
+    if (my === session) { sending = false; const el = $('#speed'); if (el) el.textContent = ''; }
+  }
 }
 
 /* ---------- CONTAINER stage: catch + save ---------- */
-let received = [], current = null, batchTotal = 0, gotBytes = 0, rxT0 = 0;
+let received = [], current = null, rx = null, rxTick = null, uiPending = false;
 function contStage(){
   view.innerHTML = `
     <div class="stage">
@@ -444,63 +529,141 @@ function contStage(){
       </div>
       <div class="gauge" id="gauge"></div>
     </div>
-    <div class="dock" id="dock"></div>`;
+    <div class="dock" id="dock"><div class="status" id="status"></div><div id="saveArea"></div></div>`;
   dc.onmessage = onRx;
+}
+function startRxBatch(){
+  clearInterval(rxTick);
+  rx = { idx: 0, of: 0, start: received.length, bytes: 0 };
+  const m = meter(), my = session;
+  rxTick = setInterval(() => {
+    if (my !== session || !rx) return clearInterval(rxTick);
+    m.add(rx.bytes); const r = m.rate(), el = $('#speed'); if (el) el.textContent = r > 0 ? mbps(r) : '';
+  }, 250);
+  $('#empty').hidden = true;
+  $('#saveArea').innerHTML = '';
 }
 function onRx(e){
   if (typeof e.data === 'string') {
     const m = JSON.parse(e.data);
-    if (m.t === 'batch') { batchTotal += m.total; if (!rxT0) rxT0 = performance.now(); $('#empty').hidden = true; }
+    if (m.t === 'bye') return peerGone();
+    if (m.t === 'batch') startRxBatch();
     else if (m.t === 'meta') {
+      if (!rx) startRxBatch();
       const el = document.createElement('div'); el.className = 'tile arriving'; el.innerHTML = tileHTML(m.name, m.size);
-      $('#inside').appendChild(el);                  // column-reverse: first file settles at the bottom
+      const cnt = el.querySelector('.cnt'); cnt.hidden = false; cnt.textContent = `${m.idx} of ${m.of}`;
+      $('#inside').appendChild(el);                    // column-reverse: first file settles at the bottom
       current = { ...m, chunks: [], got: 0, el };
+      rx.idx = m.idx; rx.of = m.of;
+      scheduleUI();
     }
     else if (m.t === 'end' && current) {
       const file = new File(current.chunks, current.name, { type: current.type || 'application/octet-stream' });
+      current.chunks = null;
+      current.el.classList.add('done');
       current.el.querySelector('.bar b').style.width = '100%';
-      received.push(file); current = null; if (navigator.vibrate) navigator.vibrate(10);
+      current.el.querySelector('.cnt').textContent = `✓ ${current.idx} of ${current.of}`;
+      received.push(file); current = null;
+      if (navigator.vibrate) navigator.vibrate(10);
+      scheduleUI();
     }
-    else if (m.t === 'done') finishRx();
+    else if (m.t === 'done') finishRx(m.count);
     return;
   }
   if (!current) return;
-  current.chunks.push(e.data); current.got += e.data.byteLength; gotBytes += e.data.byteLength;
-  current.el.querySelector('.bar b').style.width = (current.got / current.size * 100) + '%';
-  $('#fill').style.height = Math.min(92, (gotBytes / (batchTotal || 1)) * 92) + '%';
-  const s = (performance.now() - rxT0) / 1000;
-  if (s > 0.2) $('#speed').textContent = (gotBytes/1048576/s).toFixed(1) + ' MB/s';
-  $('#gauge').textContent = `${received.length + 1} arriving · ${fmt(gotBytes)} of ${fmt(batchTotal)}`;
+  current.chunks.push(e.data); current.got += e.data.byteLength; rx.bytes += e.data.byteLength;
+  scheduleUI();
 }
-function finishRx(){
-  const n = received.length, size = received.reduce((a,b) => a + b.size, 0);
-  $('#gauge').textContent = `${n} file${n>1?'s':''} received · ${fmt(size)}`;
-  $('#dock').innerHTML = `
+// Draw progress at most once per frame instead of on every chunk.
+function scheduleUI(){ if (uiPending) return; uiPending = true; requestAnimationFrame(() => { uiPending = false; drawRx(); }); }
+function drawRx(){
+  if (!rx || !$('#fill')) return;
+  const doneN = received.length - rx.start, frac = current && current.size ? current.got / current.size : 0;
+  $('#fill').style.height = Math.min(92, ((doneN + frac) / (rx.of || 1)) * 92) + '%';
+  if (current) {
+    current.el.querySelector('.bar b').style.width = (frac * 100) + '%';
+    setStatus(`Receiving ${current.idx} of ${current.of} · ${fmt(current.got)} of ${fmt(current.size)}`);
+  }
+  $('#gauge').textContent = received.length ? `${received.length} file${received.length>1?'s':''} ready to save` : '';
+}
+function finishRx(count){
+  clearInterval(rxTick); rx = null;
+  const sp = $('#speed'); if (sp) sp.textContent = '';
+  $('#fill').style.height = '92%';
+  setStatus(`Complete · ${count} of ${count} received`, true);
+  showSaveCard();
+}
+function showSaveCard(){
+  const n = received.length; if (!n) return;
+  const size = received.reduce((a,b) => a + b.size, 0);
+  const canDir = 'showDirectoryPicker' in window;
+  let canShare = false; try { canShare = !!(navigator.canShare && navigator.canShare({ files: received })); } catch(e){}
+  const note = canDir
+    ? 'Choose folder lets you pick any folder on this device.'
+    : canShare
+      ? 'Save to Files opens your phone\'s file browser so you can pick a folder. On iPhone, choose "Save to Files" in the share sheet.'
+      : 'To choose a folder for downloads, turn on "Ask where to save files" in your browser\'s download settings.';
+  $('#saveArea').innerHTML = `
     <div class="card">
-      <h2>Save ${n} file${n>1?'s':''} to Files?</h2>
-      <div class="row"><button class="btn water" id="save">Save to Files</button><button class="btn ghost" id="discard">Discard</button></div>
+      <h2>Save ${n} file${n>1?'s':''} to this ${/Mobi|Android|iPhone/i.test(navigator.userAgent) ? 'phone' : 'device'}?</h2>
+      <p>${fmt(size)} in total. ${note}</p>
+      <div class="save-opts">
+        ${canDir ? '<button class="btn water" id="saveDir">Choose folder…</button>' : ''}
+        ${canShare ? `<button class="btn ${canDir ? 'ghost' : 'water'}" id="saveShare">Save to Files…</button>` : ''}
+        <button class="btn ${canDir || canShare ? 'ghost' : 'water'}" id="saveDl">Save to Downloads</button>
+        <button class="btn ghost" id="discard">Discard</button>
+      </div>
       <div class="saved-list" id="list"></div>
     </div>`;
-  $('#save').onclick = saveAll;
-  $('#discard').onclick = resetContainer;
+  if (canDir) $('#saveDir').onclick = saveToFolder;
+  if (canShare) $('#saveShare').onclick = saveViaShare;
+  $('#saveDl').onclick = saveDownloads;
+  $('#discard').onclick = () => { clearReceived(); setStatus('Discarded. Ready for the next pour.'); };
 }
-async function saveAll(){
+async function saveToFolder(){
+  let dir;
+  try { dir = await window.showDirectoryPicker({ id: 'pourr', mode: 'readwrite', startIn: 'downloads' }); }
+  catch(e){ return; }                                  // picker cancelled
   const files = received.slice();
-  if (navigator.canShare && navigator.canShare({ files })) {
-    try { await navigator.share({ files }); return resetContainer(); } catch(e) { if (e.name === 'AbortError') return; }
-  }
-  // Fallback: one download per file, in arrival order.
-  const list = $('#list'); list.innerHTML = '';
+  try {
+    let i = 0;
+    for (const f of files) {
+      i++; setStatus(`Saving ${i} of ${files.length} · ${f.name}`);
+      const h = await dir.getFileHandle(await freeName(dir, f.name), { create: true });
+      const w = await h.createWritable(); await w.write(f); await w.close();
+    }
+    clearReceived();
+    setStatus(`Saved ${files.length} of ${files.length} to "${dir.name}"`, true);
+  } catch(e){ setStatus('Could not save to that folder. Try another folder or Save to Downloads.'); }
+}
+async function freeName(dir, name){
+  const dot = name.lastIndexOf('.'), base = dot > 0 ? name.slice(0, dot) : name, ext = dot > 0 ? name.slice(dot) : '';
+  let n = name, k = 1;
+  for (;;) { try { await dir.getFileHandle(n); n = `${base} (${k++})${ext}`; } catch(e){ return n; } }
+}
+async function saveViaShare(){
+  const files = received.slice();
+  try { await navigator.share({ files }); clearReceived(); setStatus(`Sent ${files.length} file${files.length>1?'s':''} to your chosen app`, true); }
+  catch(e){ if (e.name !== 'AbortError') setStatus('Save to Files is not available here. Use Save to Downloads.'); }
+}
+async function saveDownloads(){
+  const files = received.slice(), list = $('#list'); list.innerHTML = '';
   for (const f of files) {
     const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.textContent = 'Save ' + f.name;
     list.appendChild(a); a.click(); await new Promise(r => setTimeout(r, 350));
   }
-  $('#gauge').textContent = 'Saved. Tap a name above if a download was blocked.';
+  setStatus(`Saved ${files.length} of ${files.length} to Downloads. Tap a name if one was blocked.`, true);
+  const done = document.createElement('button'); done.className = 'btn ghost'; done.textContent = 'Done';
+  done.onclick = () => { clearReceived(); setStatus('Ready for the next pour.'); };
+  list.appendChild(done);
 }
-function resetContainer(){
-  received = []; batchTotal = 0; gotBytes = 0; rxT0 = 0;
-  [...document.querySelectorAll('#inside .tile')].forEach(t => t.remove());
-  $('#fill').style.height = '0%'; $('#empty').hidden = false; $('#dock').innerHTML = ''; $('#speed').textContent = ''; $('#gauge').textContent = '';
+function clearReceived(){
+  received = [];
+  document.querySelectorAll('#inside .tile').forEach(t => t.remove());
+  const f = $('#fill'); if (f) f.style.height = '0%';
+  const em = $('#empty'); if (em) em.hidden = false;
+  const sa = $('#saveArea'); if (sa) sa.innerHTML = '';
+  const g = $('#gauge'); if (g) g.textContent = '';
 }
 
 /* ---------- boot ---------- */
