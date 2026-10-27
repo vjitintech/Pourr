@@ -5,18 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0d1b26">
 <title>Pourr</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<meta name="description" content="Tilt to share files, just like pouring water.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <style>
 /* Layout: one-screen app. Header, a big vessel in the middle, controls docked at the bottom. */
 :root{
   --bg:#eaf1f4; --surface:#ffffff; --fg:#0e2230; --muted:#5b7182; --line:#cfdde5;
   --water:#1683c4; --water-2:#5fc0ec; --clay:#b4602f; --clay-2:#e3a173; --ok:#1f8a5b; --warn:#b5751a;
-  --display:"Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
-  --body:"IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
-  --mono:"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  /* System fonts only: nothing to download, instant first paint. */
+  --display:ui-rounded, "SF Pro Rounded", "Avenir Next", "Segoe UI Variable Display", "Segoe UI", Roboto, system-ui, sans-serif;
+  --body:system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --mono:ui-monospace, "SF Mono", Menlo, "Roboto Mono", Consolas, monospace;
   color-scheme:light;
 }
 @media (prefers-color-scheme:dark){:root{
@@ -207,7 +209,17 @@ function b64(u8){ let s=''; for (let i=0;i<u8.length;i+=0x8000) s += String.from
 function unb64(s){ s = s.replace(/-/g,'+').replace(/_/g,'/'); while (s.length%4) s+='='; const b = atob(s); const u = new Uint8Array(b.length); for (let i=0;i<b.length;i++) u[i]=b.charCodeAt(i); return u; }
 function waitIce(pc){ return new Promise(res => { if (pc.iceGatheringState === 'complete') return res(); const t = setTimeout(res, 3500); pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } }); }); }
 
-function qrImg(text){
+/* Libraries load only when needed, from Pourr's own site (cached for offline use). */
+const libs = {};
+function loadScript(src){
+  return libs[src] || (libs[src] = new Promise((res, rej) => {
+    const sc = document.createElement('script'); sc.src = src; sc.async = true;
+    sc.onload = res; sc.onerror = () => { delete libs[src]; rej(new Error('Could not load ' + src)); };
+    document.head.appendChild(sc);
+  }));
+}
+async function qrImg(text){
+  if (typeof qrcode === 'undefined') await loadScript('lib/qrcode.min.js');
   const q = qrcode(0, 'L'); q.addData(text, 'Byte'); q.make();
   return q.createDataURL(4, 2);
 }
@@ -242,6 +254,7 @@ function openScanner(){
     try { await video.play(); } catch(e){}
     let det = null;
     try { if ('BarcodeDetector' in window && (await BarcodeDetector.getSupportedFormats()).includes('qr_code')) det = new BarcodeDetector({ formats: ['qr_code'] }); } catch(e){}
+    if (!det && typeof jsQR === 'undefined') { try { await loadScript('lib/jsQR.min.js'); } catch(e){} }
     const cv = document.createElement('canvas'), cx = cv.getContext('2d', { willReadFrequently: true });
     let done = false;
     const finish = val => { if (done) return; done = true; ov.hidden = true; box.innerHTML = ''; stopCamera(); scanStop = null; resolve(val); };
@@ -252,7 +265,7 @@ function openScanner(){
       try {
         let val = null;
         if (det) { const r = await det.detect(video); if (r[0]) val = r[0].rawValue; }
-        else if (video.videoWidth) {
+        else if (video.videoWidth && typeof jsQR !== 'undefined') {
           const w = Math.min(960, video.videoWidth), h = Math.round(w * video.videoHeight / video.videoWidth);
           cv.width = w; cv.height = h; cx.drawImage(video, 0, 0, w, h);
           const r = jsQR(cx.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: 'attemptBoth' });
@@ -270,49 +283,20 @@ async function scanButton(errEl, onCode){
   catch(e){ errEl.textContent = camError(e); }
 }
 
-/* ---------- app owner settings: fill these in once (see SETUP.md) ---------- */
+/* ---------- app owner settings (see SETUP.md) ---------- */
 const CONFIG = {
-  // Your Cloudflare Worker address from relay/worker.js, e.g. 'https://pourr-relay.yourname.workers.dev/ice'
-  relayEndpoint: '',
   // Google AdSense publisher ID, e.g. 'ca-pub-1234567890123456'. Leave empty to show no ads.
   adClient: '',
   // AdSense ad unit IDs for each placement.
   adSlots: { home: '', done: '' },
 };
 
-/* ---------- network: direct routes first, free relay only when a network blocks them ---------- */
-const STUN = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
-function loadNet(){ try { return JSON.parse(localStorage.getItem('pourr.net') || '{}'); } catch(e){ return {}; } }
-function saveNet(n){ try { localStorage.setItem('pourr.net', JSON.stringify(n)); return true; } catch(e){ return false; } }
-const hasOwnRelay = () => { const n = loadNet(); return !!(n.meteredUrl || n.turnUrl); };
-const hasRelay = () => !!CONFIG.relayEndpoint || hasOwnRelay();
-let relayCache = null;                                // { servers, until }
-async function fetchJSON(url, ms){
-  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
-  try { const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' }); if (!r.ok) throw new Error(r.status); return await r.json(); }
-  finally { clearTimeout(t); }
-}
-async function builtInRelay(){
-  if (!CONFIG.relayEndpoint) return [];
-  if (relayCache && relayCache.until > Date.now()) return relayCache.servers;
-  try {
-    const j = await fetchJSON(CONFIG.relayEndpoint, 3000);
-    const servers = (Array.isArray(j) ? j : j.iceServers || []).filter(Boolean);
-    relayCache = { servers, until: Date.now() + Math.max(60, (j.ttl || 3600) - 600) * 1000 };
-    return servers;
-  } catch(e){ return []; }
-}
-async function iceServers(){
-  if (navigator.onLine === false) return [];           // offline: same Wi-Fi or hotspot only
-  const n = loadNet(), list = [...STUN];
-  // The browser always tries same-network and direct internet routes first.
-  // Relay addresses are only used when neither works, so relay traffic stays small.
-  list.push(...await builtInRelay());
-  if (n.meteredUrl) { try { const j = await fetchJSON(n.meteredUrl, 4000); const arr = Array.isArray(j) ? j : j.iceServers; if (Array.isArray(arr)) list.push(...arr); } catch(e){} }
-  if (n.turnUrl) list.push({ urls: n.turnUrl.split(',').map(x => x.trim()).filter(Boolean), username: n.turnUser || '', credential: n.turnPass || '' });
-  return list;
-}
-if (navigator.onLine !== false) builtInRelay();       // warm up so pairing doesn't wait
+/* ---------- network: always phone to phone, never through a server ----------
+   Same Wi-Fi or hotspot: devices find each other on the local network, no internet needed.
+   Different networks: free public address-lookup (STUN) lets the phones find a direct path.
+   No account, no relay: file data only ever travels between the two phones. */
+const STUN = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
+async function iceServers(){ return navigator.onLine === false ? [] : STUN; }
 
 /* ---------- ads: only on calm screens, never near the tilt area ---------- */
 let adsLoaded = false;
@@ -347,7 +331,9 @@ let pc = null, dc = null, role = null, session = 0, goneShown = false;
 async function newPeer(){
   const me = pc = new RTCPeerConnection({ iceServers: await iceServers() });
   me.addEventListener('connectionstatechange', () => {
-    if (me === pc && ['failed','disconnected','closed'].includes(me.connectionState)) peerGone();
+    if (me !== pc) return;
+    if (me.connectionState === 'failed' && (!dc || dc.readyState !== 'open')) return showHotspotHelp();
+    if (['failed','disconnected','closed'].includes(me.connectionState)) peerGone();
   });
 }
 function wireChannel(ch, onOpen){
@@ -367,6 +353,30 @@ function peerGone(){
   const dock = $('#dock');
   if (dock) dock.insertAdjacentHTML('afterbegin', html); else view.insertAdjacentHTML('afterbegin', html);
   $('#goHome').onclick = exitToHome;
+}
+
+/* ---------- fallback when two networks refuse a direct path ---------- */
+let hotspotShown = false;
+function showHotspotHelp(){
+  if (!role || hotspotShown || (dc && dc.readyState === 'open')) return;
+  hotspotShown = true;
+  const r = role;
+  view.className = 'pair';
+  view.innerHTML = `
+    <div class="card">
+      <h2>These networks won't connect directly</h2>
+      <p>Some mobile networks block phone-to-phone connections. A hotspot fixes it in a few seconds, works without internet, and is the fastest way to pour.</p>
+      <ol class="steps">
+        <li>${r === 'jug' ? 'On this phone (the Jug)' : 'On the Jug phone'}, turn on <b>Mobile hotspot</b> in Settings.</li>
+        <li>${r === 'jug' ? 'On the Container phone' : 'On this phone (the Container)'}, join that hotspot's Wi-Fi.</li>
+        <li>Tap <b>Pair again</b> on both phones.</li>
+      </ol>
+      <p class="note">Mobile data is not used for the transfer. The phones only need to be within Wi-Fi range of each other.</p>
+      <button class="btn ${r === 'jug' ? 'clay' : 'water'}" id="again">Pair again</button>
+    </div>
+    <button class="btn ghost" id="back">Back to home</button>`;
+  $('#again').onclick = () => { resetAll(); r === 'jug' ? jugPair() : contPair(); };
+  $('#back').onclick = exitToHome;
 }
 
 /* ---------- exit ---------- */
@@ -396,7 +406,7 @@ function resetAll(){
   if (scanStop) scanStop();
   stopCamera();
   window.removeEventListener('deviceorientation', onOrient);
-  role = null; goneShown = false;
+  role = null; goneShown = false; hotspotShown = false;
   jugFiles = []; pouring = false; sending = false; holdPour = false; tilt = 0; tiltOK = false;
   resumeWaiters.splice(0).forEach(r => r());
   received = []; current = null; rx = null; clearInterval(rxTick);
@@ -417,7 +427,6 @@ const mbps = r => (r / 1048576).toFixed(1) + ' MB/s';
 function home(){
   stopCamera(); setLink(false, 'Not paired'); $('#exit').hidden = true;
   view.className = 'home';
-  const n = loadNet();
   view.innerHTML = `
     <h1>Pour files from one phone into another.</h1>
     <p>Works on the same Wi-Fi or a hotspot with no internet, and across different Wi-Fi networks or mobile data when both phones are online.</p>
@@ -431,43 +440,15 @@ function home(){
       <li>Fill the jug and tilt past 40°. Files slide across in order.</li>
     </ol>
     <div class="netline">
-      <span class="tag on">Same network · no internet needed</span>
-      <span class="tag ${hasRelay() ? 'on' : ''}" id="relayTag">${CONFIG.relayEndpoint ? 'Different networks · free relay built in' : hasOwnRelay() ? 'Different networks · your relay' : 'Different networks · direct only'}</span>
+      <span class="tag on">Same Wi-Fi or hotspot · no internet needed</span>
+      <span class="tag on">Different networks · direct, phone to phone</span>
+      <span class="tag on">No sign-up · no servers</span>
     </div>
-    <details class="card" id="netCard">
-      <summary>Advanced: use my own relay server</summary>
-      <div class="net">
-        <p class="note">${CONFIG.relayEndpoint ? 'Pourr already includes a free relay. You only need this to use a relay of your own.' : 'Most phones on different networks connect directly. Some mobile carriers block that; a relay server fixes it. Only one phone needs this.'}</p>
-        <label>Credentials URL (returns ICE servers)
-          <input id="mUrl" placeholder="https://…/api/v1/turn/credentials?apiKey=…" value="${esc(n.meteredUrl || '')}"></label>
-        <p class="note">Or enter any TURN server:</p>
-        <label>TURN URL <input id="tUrl" placeholder="turn:relay.example.com:443?transport=tcp" value="${esc(n.turnUrl || '')}"></label>
-        <div class="row">
-          <label style="flex:1 1 140px">Username <input id="tUser" value="${esc(n.turnUser || '')}"></label>
-          <label style="flex:1 1 140px">Password <input id="tPass" type="password" value="${esc(n.turnPass || '')}"></label>
-        </div>
-        <div class="row"><button class="btn ghost" id="netSave">Save relay settings</button><button class="btn ghost" id="netClear">Clear</button></div>
-        <div class="note" id="netMsg"></div>
-      </div>
-    </details>
     <div id="adHome"></div>
-    <p class="note foot"><a href="privacy.html">Privacy</a> · Free, supported by ads. Your files never touch our servers.</p>`;
+    <p class="note foot"><a href="privacy.html">Privacy</a> · Free, supported by ads. Files go straight from phone to phone.</p>`;
   placeAd($('#adHome'), CONFIG.adSlots.home);
   $('#pickJug').onclick = jugPair;
   $('#pickCont').onclick = () => contPair();
-  const tag = () => { const on = hasRelay(); $('#relayTag').textContent = CONFIG.relayEndpoint ? 'Different networks · free relay built in' : on ? 'Different networks · your relay' : 'Different networks · direct only'; $('#relayTag').classList.toggle('on', on); };
-  $('#netSave').onclick = async () => {
-    const v = { meteredUrl: $('#mUrl').value.trim(), turnUrl: $('#tUrl').value.trim(), turnUser: $('#tUser').value.trim(), turnPass: $('#tPass').value };
-    if (!saveNet(v)) { $('#netMsg').textContent = 'This browser blocked saving settings. Turn off private browsing and try again.'; return; }
-    tag();
-    if (v.meteredUrl) {
-      $('#netMsg').textContent = 'Checking the relay…';
-      try { const j = await (await fetch(v.meteredUrl)).json(); const a = Array.isArray(j) ? j : j.iceServers;
-        $('#netMsg').textContent = Array.isArray(a) && a.length ? `Saved. Relay found with ${a.length} server addresses.` : 'Saved, but that URL did not return relay servers. Check the key in the URL.'; }
-      catch(e){ $('#netMsg').textContent = 'Saved, but the relay could not be reached. Check the URL and your internet connection.'; }
-    } else $('#netMsg').textContent = v.turnUrl ? 'Saved.' : 'Saved. No relay set.';
-  };
-  $('#netClear').onclick = () => { saveNet({}); ['#mUrl','#tUrl','#tUser','#tPass'].forEach(k => $(k).value = ''); tag(); $('#netMsg').textContent = 'Relay settings cleared.'; };
 }
 
 /* ---------- JUG: pairing ---------- */
@@ -489,7 +470,7 @@ async function jugPair(){
   view.innerHTML = `
     <div class="card">
       <h2>Step 1 · Container scans this</h2>
-      <div class="qr"><img alt="Pairing code" src="${qrImg(code)}"></div>
+      <div class="qr"><img alt="Pairing code" src="${await qrImg(code)}"></div>
       <div class="row">${navigator.share ? '<button class="btn ghost" id="shareLink">Share link</button>' : ''}<button class="btn ghost" id="copy">Copy code</button></div>
       <p class="note">Far apart? Share the link through any chat app and open it on the receiving phone.</p>
       <textarea id="myCode" readonly hidden>${code}</textarea>
@@ -510,9 +491,7 @@ async function jugPair(){
       const d = await unpack(c); if (d.type !== 'answer') throw new Error('That is a pairing code. Scan the reply code from the Container phone.');
       await pc.setRemoteDescription(d); $('#err').textContent = 'Connecting…';
       clearTimeout(timer);
-      timer = setTimeout(() => { if (my === session && (!dc || dc.readyState !== 'open')) $('#err').textContent = hasRelay()
-        ? 'Still connecting. Check both phones are online, then go back and pair again.'
-        : 'Still connecting. These networks block direct connections. Put both phones on the same Wi-Fi, or turn on a hotspot on one phone and join it from the other.'; }, 15000);
+      timer = setTimeout(() => { if (my === session && (!dc || dc.readyState !== 'open')) showHotspotHelp(); }, 12000);
     } catch(e){ $('#err').textContent = e.message || 'That code did not work. Try again.'; }
   };
   $('#scanReply').onclick = () => scanButton($('#err'), accept);
@@ -548,7 +527,7 @@ async function contPair(preset){
       view.innerHTML = `
         <div class="card">
           <h2>Step 2 · Jug scans this reply</h2>
-          <div class="qr"><img alt="Reply code" src="${qrImg(code)}"></div>
+          <div class="qr"><img alt="Reply code" src="${await qrImg(code)}"></div>
           <div class="row">${navigator.share ? '<button class="btn ghost" id="shareCode">Share code</button>' : ''}<button class="btn ghost" id="copy">Copy code</button></div>
           <p class="note">This screen switches to the container as soon as the phones connect. Far apart? Share the code and paste it on the Jug phone.</p>
           <textarea id="myCode" readonly hidden>${code}</textarea>
@@ -887,6 +866,8 @@ if (!window.RTCPeerConnection) {
   if (m) { history.replaceState(null, '', location.pathname); contPair(m[1]); } else home();
 }
 try { navigator.wakeLock?.request('screen').catch(()=>{}); } catch(e){}
+// Install for offline use: after the first visit Pourr opens instantly, even with no internet.
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
 </html>

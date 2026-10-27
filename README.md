@@ -13,17 +13,21 @@ Sharing files should feel as natural as pouring water from a jug into a glass. W
 3. Add files to the Jug and tilt the phone past 40°. Files pour across one by one, first out, first in.
 4. The Jug empties itself, and the Container asks to save the files to Files.
 
-## Requirements
+## How the phones connect
 
-- **Same Wi-Fi or hotspot:** works with no internet at all.
-- **Different Wi-Fi networks or mobile data:** both phones need internet. Pourr connects directly when it can, and falls back to a free built-in relay when a network blocks that. Users never pay or set anything up.
+Files always go straight from one phone to the other. There is no relay, no file server and no sign-up.
+
+- **Same Wi-Fi or hotspot:** works with no internet at all. This is the fastest route.
+- **Different Wi-Fi networks or mobile data:** both phones need internet; Pourr finds a direct path between them. Some mobile networks block this, and Pourr then shows a one-step fix: turn on a hotspot on one phone and join it from the other.
 - **Far apart:** the Jug can share a pairing link through any chat app, and the Container shares its reply code back.
-- Open the page over HTTPS (GitHub Pages does this) so the camera and tilt sensor work.
-- On iPhone, allow camera and motion access when asked.
+- Open the page over HTTPS (GitHub Pages does this) so the camera and tilt sensor work. On iPhone, allow camera and motion access when asked.
 
-## Free for users, funded by ads
+## Light and scalable
 
-Pourr is free to use. The relay runs on Cloudflare's free tier (1,000 GB a month) and the app shows a small ad on the home screen and after a pour. Owner setup steps are in [SETUP.md](SETUP.md).
+- About 17 KB on first load (compressed). QR libraries load only when needed, from Pourr's own site.
+- No outside fonts or CDNs. Installable as an app, and opens offline after the first visit.
+- No backend: hosting is a static CDN, and transfers never touch a server, so traffic can grow without limits or cost.
+- Free for users, supported by ads. Owner steps are in [SETUP.md](SETUP.md).
 
 ## Test on one computer
 
@@ -31,4 +35,4 @@ Open the page in two browser tabs, choose Jug in one and Container in the other,
 
 ## How it's built
 
-A single `index.html` with no build step. Phones connect directly using WebRTC data channels, paired by QR code or shared link with no signaling server. Public STUN servers find a route across networks, and a Cloudflare TURN relay, issued with short-lived credentials by the Worker in `relay/`, covers networks that block direct connections. Files are read in large slices and sent as ordered chunks with flow control, and the receiver rebuilds each file as it arrives.
+A single `index.html` with no build step. Phones connect directly using WebRTC data channels, paired by QR code or shared link with no signaling server. Public STUN servers help find a direct route across networks; no data passes through them. QR codes are made and read with `lib/qrcode.min.js` (MIT) and `lib/jsQR.min.js` (Apache 2.0). Files are read in large slices and sent as ordered chunks with flow control, and the receiver rebuilds each file as it arrives.

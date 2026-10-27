@@ -24,11 +24,11 @@ a{color:var(--water)}
   <p class="muted">Last updated: 27 October 2026</p>
 
   <h2>Your files</h2>
-  <p>Pourr sends files directly from one device to the other. Files are encrypted in transit by your browser (WebRTC uses DTLS encryption) and are never uploaded to or stored on our servers.</p>
-  <p>When two devices cannot reach each other directly, the encrypted data may pass through a relay server run by Cloudflare. The relay forwards encrypted data and cannot read your files.</p>
+  <p>Pourr sends files directly from one device to the other. Files are encrypted in transit by your browser (WebRTC uses DTLS encryption). Pourr has no file servers, so your files are never uploaded or stored anywhere.</p>
+  <p>There is no relay and no file server. If the two devices cannot reach each other directly, Pourr asks you to connect them with a hotspot instead.</p>
 
   <h2>Pairing</h2>
-  <p>Pairing codes and links contain network addresses the two devices need to find each other. They are shared only between the two devices, by QR code or by a link you choose to send.</p>
+  <p>Pairing codes and links contain network addresses the two devices need to find each other. They are shared only between the two devices, by QR code or by a link you choose to send. When online, each device asks a public address-lookup (STUN) server run by Google or Cloudflare for its own internet address; no file data or personal data is sent to it.</p>
 
   <h2>Camera and motion sensors</h2>
   <p>The camera is used only to scan pairing QR codes, and the motion sensor only to detect the pouring tilt. Neither is recorded or sent anywhere.</p>
