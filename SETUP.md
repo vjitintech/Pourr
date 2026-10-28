@@ -11,11 +11,7 @@ When you change any file, bump `VERSION` in `sw.js` so phones pick up the update
 ## Analytics with Google Analytics 4
 
 1. Go to **analytics.google.com**, create an account and a **Web** data stream for your site's address.
-2. Copy the **Measurement ID** (looks like `G-ABC123XYZ9`) and set it in `index.html`:
-
-```js
-gaId: 'G-ABC123XYZ9',
-```
+2. Done for Measurement ID `G-RQ5PJ9RTX8`: Google's tag is in the `<head>` of `index.html`, and `gaId` is set to match. On transfer screens the security policy blocks gtag.js, so nothing is sent from them.
 
 You'll see visitors, countries, devices and traffic sources, plus these Pourr events:
 

@@ -1,6 +1,6 @@
 // Pourr offline cache: the app opens instantly and works on a hotspot with no internet.
 // Bump VERSION whenever any file below changes.
-const VERSION = 'pourr-v7';
+const VERSION = 'pourr-v8';
 const FILES = ['./', 'index.html', 'privacy.html', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'lib/qrcode.min.js', 'lib/jsQR.min.js'];
 
 self.addEventListener('install', e => {

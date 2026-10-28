@@ -26,6 +26,15 @@
 <!-- Google AdSense. On transfer screens the security policy above blocks this script, so ads only run on the home screen. -->
 <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8906312854927768"
      crossorigin="anonymous"></script>
+<!-- Google tag (gtag.js). On transfer screens the security policy above blocks gtag.js, so nothing is sent from them. -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-RQ5PJ9RTX8"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-RQ5PJ9RTX8');
+</script>
 <style>
 /* Layout: one-screen app. Header, a big vessel in the middle, controls docked at the bottom. */
 :root{
@@ -324,7 +333,7 @@ const CONFIG = {
   // AdSense ad unit IDs. Both appear on the home screen only (see SETUP.md for why).
   adSlots: { home: '', afterPour: '' },
   // Google Analytics 4 measurement ID, e.g. 'G-ABC123XYZ9'. Leave empty for no analytics.
-  gaId: '',
+  gaId: 'G-RQ5PJ9RTX8',
 };
 const CONTACT = 'pourrft@gmail.com';
 const YEAR = 2026;
@@ -346,13 +355,16 @@ let gaLoaded = false;
 function loadAnalytics(){
   if (CLEAN || gaLoaded || !CONFIG.gaId) return;
   gaLoaded = true;
-  window.dataLayer = window.dataLayer || [];
-  window.gtag = function(){ dataLayer.push(arguments); };
-  gtag('js', new Date());
-  gtag('config', CONFIG.gaId);
-  const sc = document.createElement('script'); sc.async = true;
-  sc.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(CONFIG.gaId);
-  document.head.appendChild(sc);
+  // The Google tag in <head> already loads gtag.js and sends the page view; only add it if it's missing.
+  if (!document.querySelector('script[src*="googletagmanager.com/gtag/js"]')) {
+    window.dataLayer = window.dataLayer || [];
+    window.gtag = function(){ dataLayer.push(arguments); };
+    gtag('js', new Date());
+    gtag('config', CONFIG.gaId);
+    const sc = document.createElement('script'); sc.async = true;
+    sc.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(CONFIG.gaId);
+    document.head.appendChild(sc);
+  }
   let q = []; try { q = JSON.parse(sessionStorage.getItem('pourr.ev') || '[]'); sessionStorage.removeItem('pourr.ev'); } catch(e){}
   for (const ev of q) gtag('event', ev[0], ev[1]);
 }
