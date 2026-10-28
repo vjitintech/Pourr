@@ -540,21 +540,47 @@ function knock(p, sdp, ms, onTick, onGiveUp){
 let retry = null, reconn = null;
 function trying(){ return !!retry && retry.active(); }
 function stopTrying(){ if (retry) { retry.stop(); retry = null; } }
+/* ---------- what each phone's network allows ----------
+   Read from the addresses in the pairing codes. A phone has a direct route if it has a public
+   IPv6 address (most Indian mobile data and many home routers) or a friendly IPv4 router.
+   "Strict" means the network hands out a different public port for every destination
+   (carrier-grade NAT); two strict networks with no shared IPv6 can't reach each other without
+   a relay server, which Pourr doesn't use. */
+function netInfo(sdp){
+  const c = (sdp || '').split('\r\n').filter(l => /^a=candidate:/.test(l) && / udp /i.test(l)).map(l => { const x = l.split(' '); return { ip: x[4] || '', port: x[5], typ: x[7] }; });
+  const v6 = c.some(x => x.ip.includes(':') && !/^(fe80|fc|fd)/i.test(x.ip));
+  const v4 = c.filter(x => x.typ === 'srflx' && !x.ip.includes(':'));
+  const ports = {}; v4.forEach(x => (ports[x.ip] = ports[x.ip] || new Set()).add(x.port));
+  return { v6, v4: v4.length > 0, strict: Object.values(ports).some(p => p.size > 1) };
+}
+const netLabel = n => `${n.v6 ? 'IPv6 ✓' : 'no IPv6'} · ${n.strict ? 'strict IPv4' : n.v4 ? 'open IPv4' : 'no internet route'}`;
+let netPair = null;
+function netVerdict(){
+  if (!netPair) return '';
+  const { me, them } = netPair;
+  const line = `Network check · this phone: ${netLabel(me)} · other phone: ${netLabel(them)}.`;
+  if (me.v6 && them.v6) return line;
+  const meOk = me.v4 && !me.strict, themOk = them.v4 && !them.strict;
+  if (meOk || themOk) return line;
+  const fix = !me.v6 && them.v6 ? 'this phone' : me.v6 && !them.v6 ? 'the other phone' : 'one of the phones';
+  return `${line} These two networks can't reach each other directly. Put ${fix} on mobile data (Jio, Airtel and Vi give it IPv6), then tap Start over on both phones.`;
+}
 function keepTrying(sdp, ms, onTick){
   stopTrying(); remoteSdp = sdp;
   const me = pc;
+  try { netPair = { me: netInfo(me.localDescription && me.localDescription.sdp), them: netInfo(sdp) }; } catch(e){ netPair = null; }
   retry = knock(me, sdp, ms, onTick, () => { if (me === pc && !paired) showHotspotHelp(); });
 }
 const mmss = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
 // After pairing: a dropped connection (phone in the background, a network blip) is not the end.
-// Both phones knock again for up to 10 minutes; transfers pick up where they stopped.
+// Both phones keep knocking until one of them taps Exit; transfers pick up where they stopped.
 function reconnecting(){
   if (reconn || !pc || goneShown) return;
   const me = pc;
   setLink(false, 'Reconnecting…');
   showBanner('reconn', 'Connection interrupted', 'Reconnecting… keep Pourr open on both phones. Transfers continue where they stopped.');
-  reconn = knock(me, remoteSdp, 10 * 60000, null, () => { reconn = null; if (me === pc) peerGone(); });
+  reconn = knock(me, remoteSdp, 12 * 3600000, null, () => { reconn = null; if (me === pc) peerGone(); });   // until someone taps Exit
 }
 async function reconnected(){
   if (!reconn) return;
@@ -742,6 +768,7 @@ function showHotspotHelp(){
     <div class="card">
       <h2>These networks won't connect directly</h2>
       <p>The phones kept trying but these two networks block a direct phone-to-phone path. Pourr never sends your files through a server, so try another network instead.</p>
+      ${netPair ? `<p class="note">${esc(netVerdict())}</p>` : ''}
       <p><b>Far apart:</b> put one phone on a different network (switch from mobile data to home Wi-Fi, or the other way round), allow the camera if asked, then tap <b>Pair again</b> on both phones and send a fresh link.</p>
       <p><b>Side by side:</b> a hotspot always works, needs no internet, and is the fastest way to pour.</p>
       <ol class="steps">
@@ -902,7 +929,7 @@ async function jugPair(){
       if (d.forOffer && d.forOffer !== myUfrag) throw new Error('That reply is for an older pairing link. Share the link on this screen again and ask for a new reply.');
       accepted = true;
       await pc.setRemoteDescription({ type: d.type, sdp: d.sdp });
-      keepTrying(d.sdp, 4 * 60000, left => { const e = $('#err'); if (e && my === session) e.textContent = `Connecting to your friend's phone… keep this page open (still trying for ${mmss(left)}).`; });
+      keepTrying(d.sdp, 10 * 60000, left => { const e = $('#err'); if (e && my === session) e.textContent = `Connecting to your friend's phone… keep this page open (still trying for ${mmss(left)}). ${netVerdict()}`; });
       return true;
     } catch(e){ $('#err').textContent = e.message || 'That code did not work. Try again.'; return false; }
   };
@@ -999,7 +1026,7 @@ async function contPair(preset){
       stopCamera();
       if (my !== session) return;
       const code = await pack(pc.localDescription, ufragOf(d.sdp));
-      keepTrying(d.sdp, 10 * 60000, left => { const e = $('#wait'); if (e && my === session) e.textContent = `Waiting for the Jug to use your reply… keep this page open (${mmss(left)} left).`; });
+      keepTrying(d.sdp, 15 * 60000, left => { const e = $('#wait'); if (e && my === session) e.textContent = `Waiting for the Jug to use your reply… keep this page open (${mmss(left)} left). ${netVerdict()}`; });
       const link = location.origin + location.pathname + '#a=' + code;
       view.innerHTML = `
         <div class="card">
