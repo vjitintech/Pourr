@@ -82,8 +82,8 @@ p{margin:0;color:var(--muted);max-width:60ch}
 .role small{color:var(--muted);font-size:13px;line-height:1.35}
 .role.jug:hover{border-color:var(--clay)} .role.cont:hover{border-color:var(--water)}
 .steps{display:grid;gap:8px;margin-top:4px;padding:0;list-style:none;counter-reset:s}
-.steps li{display:grid;grid-template-columns:26px 1fr;gap:10px;color:var(--muted);font-size:14px}
-.steps li::before{counter-increment:s;content:counter(s);font:500 12px/26px var(--mono);text-align:center;border-radius:50%;background:var(--surface);border:1px solid var(--line);height:26px;color:var(--fg)}
+.steps li{position:relative;padding-left:36px;min-height:26px;color:var(--muted);font-size:14px;line-height:1.5}
+.steps li::before{counter-increment:s;content:counter(s);position:absolute;left:0;top:0;width:26px;font:500 12px/26px var(--mono);text-align:center;border-radius:50%;background:var(--surface);border:1px solid var(--line);height:26px;color:var(--fg)}
 .btn{appearance:none;border:0;border-radius:14px;padding:14px 18px;font:600 16px/1 var(--body);cursor:pointer;background:var(--fg);color:var(--bg);display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:50px}
 .btn.water{background:var(--water);color:#fff}
 .btn.clay{background:var(--clay);color:#fff}
@@ -494,16 +494,48 @@ function shareCode(text, label){
 /* ---------- connection ---------- */
 let pc = null, dc = null, role = null, session = 0, goneShown = false;
 async function newPeer(){
+  stopTrying();
   const me = pc = new RTCPeerConnection({ iceServers: await iceServers() });
   me.addEventListener('connectionstatechange', () => {
     if (me !== pc) return;
-    if (me.connectionState === 'failed' && (!dc || dc.readyState !== 'open')) return showHotspotHelp();
+    if (me.connectionState === 'failed' && (!dc || dc.readyState !== 'open')) return trying() ? null : showHotspotHelp();
     if (['failed','disconnected','closed'].includes(me.connectionState)) peerGone();
   });
 }
+/* ---------- keep trying until both phones knock at the same time ----------
+   Across two networks, a direct path only opens while BOTH phones are sending to each other.
+   The Container starts as soon as it makes its reply, the Jug only once it gets that reply,
+   often minutes later. A browser gives up after about 15 seconds, so each phone keeps
+   starting fresh attempts (the same addresses under a new label) until the two overlap. */
+let retry = null;
+function trying(){ return !!retry && Date.now() < retry.until; }
+function stopTrying(){ if (retry) { clearInterval(retry.t); retry = null; } }
+function keepTrying(remoteSdp, ms, onTick){
+  stopTrying();
+  const me = pc;
+  const cands = remoteSdp.split('\r\n').filter(l => /^a=candidate:/.test(l) && / udp /i.test(l)).map(l => l.slice(2));
+  const mid = (remoteSdp.match(/a=mid:(\S+)/) || [])[1] || '0';
+  const until = Date.now() + ms;
+  let k = 0;
+  const tick = async () => {
+    if (me !== pc || (dc && dc.readyState === 'open')) return stopTrying();
+    if (Date.now() >= until) { stopTrying(); if (me.connectionState !== 'connected') showHotspotHelp(); return; }
+    k++;
+    for (const c of cands) {
+      const v = c.replace(/^candidate:(\S+) (\d+) (\S+) (\d+)/, (m, f, comp, proto, pr) => `candidate:${f}${k} ${comp} ${proto} ${Math.max(1, Number(pr) - k)}`);
+      try { await me.addIceCandidate({ candidate: v, sdpMid: mid, sdpMLineIndex: 0 }); } catch(e){}
+    }
+    if (onTick) onTick(Math.ceil((until - Date.now()) / 1000));
+  };
+  retry = { until, t: setInterval(tick, 5000) };
+  if (onTick) onTick(Math.ceil(ms / 1000));
+}
+const mmss = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
 function wireChannel(ch, onOpen){
   dc = ch; dc.binaryType = 'arraybuffer';
   ch.onopen = async () => {
+    stopTrying();
     setLink(true, 'Paired'); stopCamera(); onOpen(); showSafety();
     const route = await routeLabel(); setLink(true, route);
     track('paired', { role, route: route.replace('Paired · ', '') });
@@ -534,7 +566,7 @@ function showHotspotHelp(){
   view.innerHTML = `
     <div class="card">
       <h2>These networks won't connect directly</h2>
-      <p>Some networks block direct phone-to-phone connections. Pourr never sends your files through a server, so try another network instead.</p>
+      <p>The phones kept trying but these two networks block a direct phone-to-phone path. Pourr never sends your files through a server, so try another network instead.</p>
       <p><b>Far apart:</b> put one phone on a different network (switch from mobile data to home Wi-Fi, or the other way round), allow the camera if asked, then tap <b>Pair again</b> on both phones and send a fresh link.</p>
       <p><b>Side by side:</b> a hotspot always works, needs no internet, and is the fastest way to pour.</p>
       <ol class="steps">
@@ -680,7 +712,7 @@ async function jugPair(){
   const shared = () => { try { sessionStorage.setItem('pourr.offerShared', '1'); } catch(e){} };
   $('#copy').onclick = () => { copyText(code, $('#myCode')); $('#copy').textContent = 'Copied'; shared(); $('#err').textContent = 'Code copied. Paste it into WhatsApp (or any chat) and send it to your friend; they paste it in Container. Keep this page open.'; };
   if ($('#shareLink')) $('#shareLink').onclick = () => { shared(); shareCode(link, 'Open this link to receive files with Pourr FT:'); };
-  let timer = null, accepted = false;
+  let accepted = false;
   const accept = async (c) => {
     if (accepted) return true;
     try {
@@ -691,9 +723,8 @@ async function jugPair(){
       }
       if (d.forOffer && d.forOffer !== myUfrag) throw new Error('That reply is for an older pairing link. Share the link on this screen again and ask for a new reply.');
       accepted = true;
-      await pc.setRemoteDescription({ type: d.type, sdp: d.sdp }); $('#err').textContent = 'Connecting…';
-      clearTimeout(timer);
-      timer = setTimeout(() => { if (my === session && (!dc || dc.readyState !== 'open')) showHotspotHelp(); }, 25000);
+      await pc.setRemoteDescription({ type: d.type, sdp: d.sdp });
+      keepTrying(d.sdp, 4 * 60000, left => { const e = $('#err'); if (e && my === session) e.textContent = `Connecting to your friend's phone… keep this page open (still trying for ${mmss(left)}).`; });
       return true;
     } catch(e){ $('#err').textContent = e.message || 'That code did not work. Try again.'; return false; }
   };
@@ -790,6 +821,7 @@ async function contPair(preset){
       stopCamera();
       if (my !== session) return;
       const code = await pack(pc.localDescription, ufragOf(d.sdp));
+      keepTrying(d.sdp, 10 * 60000, left => { const e = $('#wait'); if (e && my === session) e.textContent = `Waiting for the Jug to use your reply… keep this page open (${mmss(left)} left).`; });
       const link = location.origin + location.pathname + '#a=' + code;
       view.innerHTML = `
         <div class="card">
@@ -797,6 +829,7 @@ async function contPair(preset){
           <div class="qr"><img alt="Reply code" src="${await qrImg(code)}"></div>
           <div class="row">${navigator.share ? '<button class="btn water" id="shareCode">Share reply link</button>' : ''}<button class="btn ghost" id="copy">Copy code</button></div>
           <p class="note">Nearby: the Jug scans this. Far apart: share the reply link back in the same chat (your friend taps it), or copy the code and send it (your friend taps Paste reply). This screen switches to the container as soon as the phones connect.</p>
+          <div class="err" id="wait" aria-live="polite"></div>
           <textarea id="myCode" readonly hidden>${code}</textarea>
         </div>
         <button class="btn ghost" id="back2">Start over</button>`;
