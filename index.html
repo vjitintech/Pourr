@@ -179,6 +179,11 @@ details.card{display:block}
 .tile.bad{border-color:var(--warn)}
 .card.last{gap:8px}
 body{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+/* rotation lock during a pour: the page turns back against the phone's rotation */
+body.rot{position:fixed;top:50%;left:50%;width:100vw;height:100vh;overflow:auto;transform:translate(-50%,-50%) rotate(var(--lock-deg))}
+body.rot.rot-side{width:100vh;height:100vw}
+body.rot-side main.work{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;gap:12px}
+body.rot-side main.work .dock{max-height:46vw}
 input,textarea,.foot a,#mail{-webkit-touch-callout:default;-webkit-user-select:text;user-select:text}
 .foot a{color:var(--water)}
 details.card summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px;color:var(--fg);font-weight:500}
@@ -492,51 +497,85 @@ function shareCode(text, label){
 }
 
 /* ---------- connection ---------- */
-let pc = null, dc = null, role = null, session = 0, goneShown = false;
+let pc = null, dc = null, role = null, session = 0, goneShown = false, paired = false, remoteSdp = '';
 async function newPeer(){
   stopTrying();
   const me = pc = new RTCPeerConnection({ iceServers: await iceServers() });
   me.addEventListener('connectionstatechange', () => {
     if (me !== pc) return;
-    if (me.connectionState === 'failed' && (!dc || dc.readyState !== 'open')) return trying() ? null : showHotspotHelp();
-    if (['failed','disconnected','closed'].includes(me.connectionState)) peerGone();
+    const st = me.connectionState;
+    if (!paired) { if (st === 'failed' && !trying()) showHotspotHelp(); return; }
+    if (st === 'connected') return reconnected();
+    if (st === 'disconnected' || st === 'failed') return reconnecting();
+    if (st === 'closed') peerGone();
   });
 }
+
 /* ---------- keep trying until both phones knock at the same time ----------
    Across two networks, a direct path only opens while BOTH phones are sending to each other.
    The Container starts as soon as it makes its reply, the Jug only once it gets that reply,
    often minutes later. A browser gives up after about 15 seconds, so each phone keeps
-   starting fresh attempts (the same addresses under a new label) until the two overlap. */
-let retry = null;
-function trying(){ return !!retry && Date.now() < retry.until; }
-function stopTrying(){ if (retry) { clearInterval(retry.t); retry = null; } }
-function keepTrying(remoteSdp, ms, onTick){
-  stopTrying();
-  const me = pc;
-  const cands = remoteSdp.split('\r\n').filter(l => /^a=candidate:/.test(l) && / udp /i.test(l)).map(l => l.slice(2));
-  const mid = (remoteSdp.match(/a=mid:(\S+)/) || [])[1] || '0';
+   starting fresh attempts (the same addresses under a new label) until the two overlap.
+   The same knocking brings a connection back after a phone was in the background. */
+function knock(p, sdp, ms, onTick, onGiveUp){
+  const cands = sdp.split('\r\n').filter(l => /^a=candidate:/.test(l) && / udp /i.test(l)).map(l => l.slice(2));
+  const mid = (sdp.match(/a=mid:(\S+)/) || [])[1] || '0';
   const until = Date.now() + ms;
-  let k = 0;
+  const h = { until, t: null, stop(){ clearInterval(h.t); h.t = null; }, active(){ return !!h.t && Date.now() < until; } };
   const tick = async () => {
-    if (me !== pc || (dc && dc.readyState === 'open')) return stopTrying();
-    if (Date.now() >= until) { stopTrying(); if (me.connectionState !== 'connected') showHotspotHelp(); return; }
-    k++;
+    if (!h.t) return;
+    if (p.connectionState === 'connected' || p.connectionState === 'closed') return h.stop();
+    if (Date.now() >= until) { h.stop(); if (onGiveUp) onGiveUp(); return; }
+    const k = p._knock = (p._knock || 0) + 1;
     for (const c of cands) {
       const v = c.replace(/^candidate:(\S+) (\d+) (\S+) (\d+)/, (m, f, comp, proto, pr) => `candidate:${f}${k} ${comp} ${proto} ${Math.max(1, Number(pr) - k)}`);
-      try { await me.addIceCandidate({ candidate: v, sdpMid: mid, sdpMLineIndex: 0 }); } catch(e){}
+      try { await p.addIceCandidate({ candidate: v, sdpMid: mid, sdpMLineIndex: 0 }); } catch(e){}
     }
     if (onTick) onTick(Math.ceil((until - Date.now()) / 1000));
   };
-  retry = { until, t: setInterval(tick, 5000) };
+  h.t = setInterval(tick, 5000);
   if (onTick) onTick(Math.ceil(ms / 1000));
+  return h;
+}
+let retry = null, reconn = null;
+function trying(){ return !!retry && retry.active(); }
+function stopTrying(){ if (retry) { retry.stop(); retry = null; } }
+function keepTrying(sdp, ms, onTick){
+  stopTrying(); remoteSdp = sdp;
+  const me = pc;
+  retry = knock(me, sdp, ms, onTick, () => { if (me === pc && !paired) showHotspotHelp(); });
 }
 const mmss = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+// After pairing: a dropped connection (phone in the background, a network blip) is not the end.
+// Both phones knock again for up to 10 minutes; transfers pick up where they stopped.
+function reconnecting(){
+  if (reconn || !pc || goneShown) return;
+  const me = pc;
+  setLink(false, 'Reconnecting…');
+  showBanner('reconn', 'Connection interrupted', 'Reconnecting… keep Pourr open on both phones. Transfers continue where they stopped.');
+  reconn = knock(me, remoteSdp, 10 * 60000, null, () => { reconn = null; if (me === pc) peerGone(); });
+}
+async function reconnected(){
+  if (!reconn) return;
+  reconn.stop(); reconn = null;
+  hideBanner('reconn');
+  setLink(true, await routeLabel());
+}
+function showBanner(id, title, text){
+  if ($('#' + id)) return;
+  const html = `<div class="card banner" id="${id}"><h2>${esc(title)}</h2><p>${esc(text)}</p></div>`;
+  const dock = $('#dock');
+  if (dock) dock.insertAdjacentHTML('afterbegin', html); else view.insertAdjacentHTML('afterbegin', html);
+}
+function hideBanner(id){ const b = $('#' + id); if (b) b.remove(); }
 
 function wireChannel(ch, onOpen){
   dc = ch; dc.binaryType = 'arraybuffer';
   ch.onopen = async () => {
-    stopTrying();
+    stopTrying(); paired = true;
     setLink(true, 'Paired'); stopCamera(); onOpen(); showSafety();
+    if (role === 'jug') openLanes();
     const route = await routeLabel(); setLink(true, route);
     track('paired', { role, route: route.replace('Paired · ', '') });
   };
@@ -545,8 +584,10 @@ function wireChannel(ch, onOpen){
 function peerGone(){
   if (!role || goneShown || !dc) return;
   goneShown = true;
+  if (reconn) { reconn.stop(); reconn = null; } hideBanner('reconn');
   setLink(false, 'Disconnected');
-  pouring = false;
+  pouring = false; pourOn = false;
+  stopKeepAlive(); unlockRotation();
   const keep = role === 'container' && received.length;
   const html = `<div class="card banner" id="goneCard"><h2>The other phone disconnected</h2>
     <p>${keep ? 'Your received files are still here. Save them before you leave.' : 'Pair again to keep pouring.'}</p>
@@ -555,6 +596,140 @@ function peerGone(){
   if (dock) dock.insertAdjacentHTML('afterbegin', html); else view.insertAdjacentHTML('afterbegin', html);
   $('#goHome').onclick = exitToHome;
 }
+
+/* ---------- lanes: several parallel connections for speed ----------
+   One browser connection keeps only about 100 KB in flight, so over the internet its speed
+   falls with distance (about 2 MB/s at a 50 ms round trip). Pourr opens extra connections
+   ("lanes") between the same two phones and pours slices of each file through all of them.
+   Lanes are set up over the first, already verified connection, so the safety code covers them. */
+const LANES = 8;
+let lanes = [];          // lanes[0] is the main connection
+function mainLane(){ if (!lanes[0] || lanes[0].ch !== dc) lanes[0] = { i: 0, pc, ch: dc, inflight: new Map(), cur: null }; return lanes[0]; }
+function laneUp(l){ return l && !l.dead && l.ch && l.ch.readyState === 'open' && (l.i === 0 || l.pc.connectionState !== 'failed'); }
+function makeLane(i){
+  const my = session;
+  return iceServers().then(servers => {
+    if (my !== session) return null;
+    const p = new RTCPeerConnection({ iceServers: servers });
+    const ch = p.createDataChannel('lane', { negotiated: true, id: 0, ordered: true });
+    ch.binaryType = 'arraybuffer';
+    const l = { i, pc: p, ch, inflight: new Map(), cur: null, dead: false, since: 0, knock: null, sdp: '' };
+    lanes[i] = l;
+    ch.onopen = () => { if (my === session && sending) startWorker(l); };
+    ch.onclose = () => { l.dead = true; requeueLane(l); };
+    ch.onmessage = e => laneRx(l, e);
+    p.addEventListener('connectionstatechange', () => {
+      const st = p.connectionState;
+      if (st === 'connected') { l.since = 0; if (l.knock) { l.knock.stop(); l.knock = null; } }
+      else if ((st === 'disconnected' || st === 'failed') && l.sdp) {
+        l.since = l.since || Date.now();
+        if (!l.knock) l.knock = knock(p, l.sdp, 10 * 60000, null, null);
+      }
+    });
+    return l;
+  });
+}
+async function openLanes(){
+  const my = session;
+  lanes = []; mainLane();
+  const one = async i => {
+    const l = await makeLane(i); if (!l || my !== session) return;
+    await l.pc.setLocalDescription(await l.pc.createOffer());
+    await waitIce(l.pc);
+    if (my !== session || !dc || dc.readyState !== 'open') return;
+    dc.send(JSON.stringify({ t: 'lane', i, sdp: l.pc.localDescription.sdp }));
+  };
+  await Promise.all(Array.from({ length: LANES - 1 }, (_, k) => one(k + 1).catch(() => {})));
+}
+async function onLaneOffer(m){
+  const my = session;
+  if (lanes[m.i]) try { lanes[m.i].pc.close(); } catch(e){}
+  const l = await makeLane(m.i); if (!l || my !== session) return;
+  l.sdp = m.sdp;
+  await l.pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
+  await l.pc.setLocalDescription(await l.pc.createAnswer());
+  await waitIce(l.pc);
+  if (my !== session || !dc || dc.readyState !== 'open') return;
+  dc.send(JSON.stringify({ t: 'lane-ans', i: m.i, sdp: l.pc.localDescription.sdp }));
+  l.knock = knock(l.pc, m.sdp, 2 * 60000, null, null);
+}
+async function onLaneAnswer(m){
+  const l = lanes[m.i]; if (!l) return;
+  l.sdp = m.sdp;
+  try { await l.pc.setRemoteDescription({ type: 'answer', sdp: m.sdp }); } catch(e){ return; }
+  l.knock = knock(l.pc, m.sdp, 2 * 60000, null, null);
+}
+function closeLanes(){
+  for (const l of lanes) if (l && l.i > 0) { l.dead = true; if (l.knock) l.knock.stop(); try { l.ch.onclose = null; l.ch.close(); l.pc.close(); } catch(e){} }
+  lanes = [];
+}
+
+/* ---------- keep running in the background ----------
+   Phones pause web pages in the background. During a transfer Pourr keeps the screen awake
+   and plays a silent, 30 Hz tone (too low for phone speakers to play), which counts as media
+   playing, so the browser keeps the page and the transfer running while you use other apps. */
+let keepAudio = null, wakeLock = null, keepOn = false;
+function primeKeepAlive(){
+  if (keepAudio) return;
+  const sr = 8000, n = sr * 2, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const s = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  s(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); s(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); s(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.round(Math.sin(2 * Math.PI * 30 * i / sr) * 100), true);
+  keepAudio = new Audio(URL.createObjectURL(new Blob([buf], { type: 'audio/wav' })));
+  keepAudio.loop = true; keepAudio.setAttribute('playsinline', '');
+  // Unlock playback now, during a tap, so it can start later without one (needed on iPhone).
+  keepAudio.play().then(() => { if (!keepOn) keepAudio.pause(); }).catch(() => {});
+}
+async function startKeepAlive(){
+  keepOn = true;
+  try { if (!wakeLock && navigator.wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { wakeLock = null; }); } } catch(e){}
+  if (keepAudio) {
+    try { keepAudio.play().catch(() => {}); } catch(e){}
+    if ('mediaSession' in navigator) try { navigator.mediaSession.metadata = new MediaMetadata({ title: 'Pourr FT', artist: 'Transfer in progress · keep Pourr open' }); } catch(e){}
+  }
+}
+function stopKeepAlive(){
+  keepOn = false;
+  try { if (keepAudio) keepAudio.pause(); } catch(e){}
+  try { if (wakeLock) wakeLock.release(); } catch(e){}
+  wakeLock = null;
+}
+document.addEventListener('pointerdown', () => { if (role) primeKeepAlive(); }, true);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (keepOn) startKeepAlive();                              // the wake lock is dropped while hidden
+  if (paired && pc && pc.connectionState !== 'connected') reconnecting();
+});
+
+/* ---------- screen rotation stays put during a pour ----------
+   While files are pouring, the page keeps the orientation it had when the pour started:
+   if the phone rotates, the page turns back the other way, so nothing flips mid-transfer.
+   Afterwards the phone's own rotation setting applies again. */
+let rotLock = null;
+function screenAngle(){ const a = screen.orientation ? screen.orientation.angle : (window.orientation || 0); return ((a % 360) + 360) % 360; }
+function lockRotation(){
+  if (rotLock !== null) return;
+  rotLock = screenAngle();
+  try { const o = screen.orientation; if (o && o.lock) o.lock(o.type).catch(() => {}); } catch(e){}
+  applyRot();
+}
+function unlockRotation(){
+  if (rotLock === null) return;
+  rotLock = null;
+  try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch(e){}
+  applyRot();
+}
+function applyRot(){
+  const d = rotLock === null ? 0 : (screenAngle() - rotLock + 360) % 360;
+  const b = document.body;
+  b.classList.toggle('rot', d !== 0);
+  b.classList.toggle('rot-side', d === 90 || d === 270);
+  b.style.setProperty('--lock-deg', (-d) + 'deg');
+}
+window.addEventListener('orientationchange', () => setTimeout(applyRot, 50));
+try { screen.orientation.addEventListener('change', applyRot); } catch(e){}
+window.addEventListener('resize', applyRot);
 
 /* ---------- fallback when two networks refuse a direct path ---------- */
 let hotspotShown = false;
@@ -611,7 +786,10 @@ function resetAll(){
   stopCamera();
   window.removeEventListener('deviceorientation', onOrient);
   role = null; goneShown = false; hotspotShown = false;
-  jugFiles = []; pouring = false; sending = false; holdPour = false; tilt = 0; tiltOK = false;
+  jugFiles = []; pouring = false; pourOn = false; sending = false; holdPour = false; tilt = 0; tiltOK = false;
+  paired = false; jobs = null; rxFiles = new Map(); early.clear(); closeLanes();
+  if (reconn) { reconn.stop(); reconn = null; }
+  stopKeepAlive(); unlockRotation();
   resumeWaiters.splice(0).forEach(r => r());
   received = []; current = null; rx = null; clearInterval(rxTick);
   const b = $('#exit'); b.classList.remove('armed'); b.textContent = 'Exit'; clearTimeout(exitArm);
@@ -855,7 +1033,9 @@ const POUR_ANGLE = 40;
 let tilt = 0, tiltOK = false, holdPour = false;
 function onOrient(e){
   const g = e.gamma || 0, b = e.beta || 0;
-  tilt = (screen.orientation && Math.abs(screen.orientation.angle) === 90) ? b : g;
+  // Measured against how the page is held: while rotation is locked, that's the locked orientation.
+  const ang = rotLock !== null ? rotLock : screenAngle();
+  tilt = (ang === 90 || ang === 270) ? b : g;
   tiltOK = true;
 }
 async function enableTilt(){
@@ -870,9 +1050,9 @@ async function enableTilt(){
 
 /* ---------- JUG stage: fill + pour ---------- */
 let jugFiles = [];       // queue, first in first out
-let pouring = false, sending = false, resumeWaiters = [];
+let pouring = false, pourOn = false, sending = false, resumeWaiters = [];
 const CHUNK_DEFAULT = 64 * 1024;
-function chunkSize(){ const m = pc?.sctp?.maxMessageSize; return Math.max(16384, Math.min(m && isFinite(m) ? m : CHUNK_DEFAULT, 256 * 1024)); }
+function chunkSize(p){ const m = (p || pc)?.sctp?.maxMessageSize; return Math.max(16384, Math.min(m && isFinite(m) ? m : CHUNK_DEFAULT, 256 * 1024)); }
 
 function jugStage(){
   view.className = 'work';
@@ -898,27 +1078,22 @@ function jugStage(){
         <button class="btn ghost" id="add">Add files</button>
         <button class="btn clay" id="tiltBtn">Enable tilt to pour</button>
       </div>
-      <button class="btn ghost" id="hold" disabled>Hold here to pour (no tilt sensor)</button>
+      <button class="btn ghost" id="hold" disabled>Tap to pour (no tilt sensor)</button>
+      <button class="btn ghost" id="pause" hidden>Pause pouring</button>
     </div>`;
-  dc.onmessage = e => {
-    if (typeof e.data !== 'string') return;
-    let m; try { m = JSON.parse(e.data); } catch(_){ return; }
-    if (m.t === 'bye') peerGone();
-    else if (m.t === 'ack') onAck(m);
-  };
+  dc.onmessage = e => laneRx(mainLane(), e);
   $('#add').onclick = () => $('#pick').click();
   $('#pick').onchange = e => { addToJug([...e.target.files]); e.target.value = ''; };
   $('#tiltBtn').onclick = async () => {
     const ok = await enableTilt();
-    $('#tiltBtn').textContent = ok ? 'Tilt is on · tip to pour' : 'Tilt unavailable · use hold';
+    $('#tiltBtn').textContent = ok ? 'Tilt is on · tip to pour' : 'Tilt unavailable · tap to pour';
     $('#tiltBtn').disabled = true;
     if (!ok) $('#hold').disabled = false;
     setTimeout(() => { if (!tiltOK && $('#hold')) $('#hold').disabled = false; }, 1500);
   };
-  const hold = $('#hold');
-  const on = e => { e.preventDefault(); holdPour = true; }, off = () => { holdPour = false; };
-  hold.addEventListener('pointerdown', on); hold.addEventListener('pointerup', off); hold.addEventListener('pointerleave', off); hold.addEventListener('pointercancel', off);
-  if (!('DeviceOrientationEvent' in window)) hold.disabled = false;
+  $('#hold').onclick = () => startPour();
+  $('#pause').onclick = () => { if (pourOn) { pourOn = false; $('#pause').textContent = 'Resume pouring'; setStatus('Paused. Tap Resume or tilt again to continue.'); } else startPour(); };
+  if (!('DeviceOrientationEvent' in window)) $('#hold').disabled = false;
   renderJug();
   const my = session; requestAnimationFrame(() => jugLoop(my));
 }
@@ -926,6 +1101,7 @@ function addToJug(files){
   for (const f of files) jugFiles.push({ id: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()), file: f, sent: 0, el: null });
   renderJug();
   if (!sending) setStatus(jugFiles.length ? `${jugFiles.length} file${jugFiles.length>1?'s':''} in the jug · tilt to pour` : '');
+  else pourFiles();                                 // files added mid-pour join the queue
 }
 function tileHTML(name, size){ return `<span class="cnt" hidden></span><div class="ext">${esc(extOf(name)).slice(0,4)}</div><div style="min-width:0"><div class="nm">${esc(name)}</div><div class="sz">${fmt(size)}</div></div><div class="bar"><b></b></div>`; }
 function renderJug(){
@@ -936,35 +1112,49 @@ function renderJug(){
   $('#fill').style.height = jugFiles.length ? Math.max(12, Math.min(92, 18 + jugFiles.length * 9)) * (total ? left/total : 1) + '%' : '0%';
   $('#gauge').textContent = jugFiles.length ? `${jugFiles.length} file${jugFiles.length>1?'s':''} · ${fmt(left)} to pour` : '';
 }
+// Tilting past the pour angle starts the pour; it then keeps going on its own until the jug is
+// empty, even if the phone is put down, the screen turns off or another app is opened.
+function startPour(){
+  if (!jugFiles.length || !dc || dc.readyState !== 'open') return;
+  pourOn = true;
+  const p = $('#pause'); if (p) { p.hidden = false; p.textContent = 'Pause pouring'; }
+  resumeWaiters.splice(0).forEach(r => r());
+  if (!sending) pourQueue();
+}
 function jugLoop(my){
   if (my !== session || role !== 'jug' || !$('#vessel')) return;
-  const ang = holdPour ? 55 : tilt;
+  const ang = pourOn ? Math.max(Math.abs(tilt), 55) * (tilt < 0 ? -1 : 1) : tilt;
   const vis = Math.max(-75, Math.min(75, ang));
   $('#vessel').style.transform = `rotate(${vis}deg)`;
-  $('#tiltRead').textContent = holdPour ? 'pouring (hold)' : `tilt ${Math.round(Math.abs(ang))}°`;
-  const want = (Math.abs(ang) >= POUR_ANGLE) && jugFiles.length > 0 && dc && dc.readyState === 'open';
+  $('#tiltRead').textContent = pourOn ? 'pouring' : `tilt ${Math.round(Math.abs(tilt))}°`;
+  if (!pourOn && Math.abs(tilt) >= POUR_ANGLE && jugFiles.length && dc && dc.readyState === 'open') startPour();
+  const want = pourOn && sending;
   if (want !== pouring) {
     pouring = want;
     document.documentElement.style.setProperty('--dx', (ang < 0 ? '-160%' : '160%'));
     document.documentElement.style.setProperty('--rot', (ang < 0 ? '-35deg' : '35deg'));
-    if (pouring) resumeWaiters.splice(0).forEach(r => r());
   }
-  if (pouring && !sending && jugFiles.length) pourQueue();
   requestAnimationFrame(() => jugLoop(my));
 }
-const waitPour = () => pouring ? Promise.resolve() : new Promise(r => resumeWaiters.push(r));
-function waitDrain(ch){ return new Promise(r => { if (ch.bufferedAmount <= ch.bufferedAmountLowThreshold) return r(); ch.addEventListener('bufferedamountlow', r, { once: true }); }); }
+const waitPour = () => pourOn ? Promise.resolve() : new Promise(r => resumeWaiters.push(r));
+function waitDrain(ch){ return new Promise(r => { if (ch.bufferedAmount <= ch.bufferedAmountLowThreshold || ch.readyState !== 'open') return r(); const t = setInterval(() => { if (ch.readyState !== 'open') { clearInterval(t); r(); } }, 1000); ch.addEventListener('bufferedamountlow', () => { clearInterval(t); r(); }, { once: true }); }); }
 
 // Receiver confirmations for the current pour.
 let pourBatch = null;      // { ids:Set, total, ok, bad, bytes, t0, t1 }
 function onAck(m){
   const b = pourBatch; if (!b || !b.ids.has(m.id)) return;
   b.ids.delete(m.id); m.ok ? b.ok++ : b.bad++;
-  if (b.done) reportBatch();
+  const it = b.items.get(m.id);
+  if (it) {
+    const cnt = it.el.querySelector('.cnt'); cnt.textContent = m.ok ? `✓ ${it.idx} of ${it.of}` : `✗ ${it.idx} of ${it.of}`;
+    it.el.classList.add(m.ok ? 'done' : 'bad', 'leaving');
+    const el = it.el; setTimeout(() => el.remove(), 700);
+    jugFiles = jugFiles.filter(x => x !== it); renderJug();
+  }
+  if (!b.ids.size && b.done) finishPour();
 }
 function reportBatch(){
-  const b = pourBatch; if (!b || !b.done) return;
-  if (b.ids.size) { setStatus(`Complete · ${b.total} of ${b.total} poured · confirming ${b.ok + b.bad} of ${b.total}…`, true); return; }
+  const b = pourBatch; if (!b) return;
   const secs = (b.t1 - b.t0) / 1000, rate = secs > 0 ? b.bytes / secs : 0;
   if (b.bad) setStatus(`${b.ok} of ${b.total} delivered and verified · ${b.bad} damaged on the way. Add ${b.bad > 1 ? 'them' : 'it'} again and pour.`);
   else setStatus(`Complete · ${b.total} of ${b.total} delivered and verified · ${fmt(b.bytes)} in ${dur(secs)}`, true);
@@ -972,71 +1162,145 @@ function reportBatch(){
   remember({ title: b.bad ? 'Pour finished with errors' : 'Pour complete', text: `${b.ok} of ${b.total} file${b.total > 1 ? 's' : ''} delivered and verified · ${fmt(b.bytes)} in ${dur(secs)}` });
 }
 
-const SLICE = 4 * 1048576;                              // read and fingerprint 4 MB at a time
+/* The pour: files go out first in, first out. Each file is cut into 4 MB slices; every slice is
+   fingerprinted (SHA-256) and sent whole through whichever lane is free. The Container confirms
+   each slice; a slice caught on a lane that drops is sent again on another lane. */
+const SLICE = 4 * 1048576;
+let jobs = null;           // { requeue:[], file:it|null, next:0, idx:0 }
 async function readSlice(f, off){
   const buf = await f.slice(off, off + SLICE).arrayBuffer();
   return { buf, h: hex(await crypto.subtle.digest('SHA-256', buf)) };
 }
-async function pourQueue(){
-  const my = session, ch = dc;
-  sending = true;
-  const CH = chunkSize(), HIGH = 4 * 1048576;
+function nextJob(){
+  const q = jobs; if (!q) return null;
+  if (q.requeue.length) return q.requeue.shift();
+  while (true) {
+    const it = q.file;
+    if (it && q.next < it.slices) { const i = q.next++; return { it, i, off: i * SLICE, len: Math.min(SLICE, it.file.size - i * SLICE) }; }
+    const nx = jugFiles.find(x => !x.started); if (!nx) return null;
+    startFile(nx);
+  }
+}
+function startFile(it){
+  const q = jobs, b = pourBatch;
+  it.started = true; it.slices = Math.ceil(it.file.size / SLICE); it.acked = 0;
+  q.file = it; q.next = 0; q.idx++;
+  it.idx = q.idx; it.of = q.idx - 1 + jugFiles.filter(x => !x.started).length + 1;
+  b.ids.add(it.id); b.items.set(it.id, it); b.total = q.idx;
+  const cnt = it.el.querySelector('.cnt'); cnt.hidden = false; cnt.textContent = `${it.idx} of ${it.of}`;
+  setStatus(`Pouring ${it.idx} of ${it.of} · ${it.file.name}`);
+  const f = it.file;
+  dc.send(JSON.stringify({ t: 'meta', id: it.id, name: f.name, size: f.size, type: f.type, idx: it.idx, of: it.of, slices: it.slices, slice: SLICE }));
+}
+function requeueLane(l){
+  if (!jobs || !l.inflight.size) return;
+  for (const j of l.inflight.values()) { j.it.sent -= j.sentBytes || 0; jobs.bytes -= j.sentBytes || 0; jobs.requeue.push(j); }
+  l.inflight.clear();
+  for (const x of lanes) if (laneUp(x) && !x.working) startWorker(x);
+}
+function onSliceAck(m){
+  for (const l of lanes) if (l) { const j = l.inflight.get(m.f + ':' + m.i); if (j) { l.inflight.delete(m.f + ':' + m.i); j.it.acked++; } }
+}
+async function worker(l){
+  const my = session, ch = l.ch, CH = chunkSize(l.pc), HIGH = 4 * 1048576;
   ch.bufferedAmountLowThreshold = 1048576;
-  let idx = 0, bytes = 0;
-  pourBatch = { ids: new Set(), total: 0, ok: 0, bad: 0, bytes: 0, t0: performance.now(), t1: 0, done: false };
-  const batch = pourBatch;
+  const live = () => my === session && laneUp(l) && !!jobs;
+  while (live()) {
+    await waitPour(); if (!live()) return;
+    // A lane stuck in a dropped connection hands its slices to the others after 8 s.
+    if (l.i > 0 && l.since && Date.now() - l.since > 8000) { requeueLane(l); await new Promise(r => setTimeout(r, 2000)); continue; }
+    const j = nextJob(); if (!j) return;
+    const { buf, h } = await readSlice(j.it.file, j.off);
+    if (!live()) { jobs && jobs.requeue.push(j); return; }
+    j.sentBytes = 0;
+    l.inflight.set(j.it.id + ':' + j.i, j);
+    ch.send(JSON.stringify({ t: 's', f: j.it.id, i: j.i, n: buf.byteLength, h }));
+    for (let p = 0; p < buf.byteLength; p += CH) {
+      if (!pourOn) await waitPour();
+      if (ch.bufferedAmount > HIGH) await waitDrain(ch);
+      if (!live()) return;
+      ch.send(buf.slice(p, p + CH));
+      const n = Math.min(CH, buf.byteLength - p); j.sentBytes += n; j.it.sent += n; jobs.bytes += n;
+    }
+  }
+}
+function startWorker(l){
+  if (!jobs || l.working || !laneUp(l)) return;
+  l.working = true;
+  worker(l).catch(() => {}).finally(() => { l.working = false; if (jobs) jobs.check(); });
+}
+async function pourQueue(){
+  if (sending) return;
+  const my = session;
+  sending = true; startKeepAlive(); lockRotation();
+  mainLane();
+  pourBatch = { ids: new Set(), items: new Map(), total: 0, ok: 0, bad: 0, bytes: 0, t0: performance.now(), t1: 0, done: false };
+  jobs = { requeue: [], file: null, next: 0, idx: 0, bytes: 0, check: () => {} };
   const m = meter();
   const tick = setInterval(() => {
-    m.add(bytes); const r = m.rate(), el = $('#speed');
-    if (el) el.textContent = r > 0 ? mbps(r) : (pouring ? '' : 'paused');
+    if (my !== session || !jobs) return;
+    m.add(jobs.bytes); const r = m.rate(), el = $('#speed');
+    if (el) el.textContent = r > 0 ? mbps(r) : (pourOn ? '' : 'paused');
+    for (const it of jugFiles) if (it.el && it.started && it.file.size) it.el.querySelector('.bar b').style.width = Math.min(100, it.sent / it.file.size * 100) + '%';
+    renderJug();
+    for (const l of lanes) if (l && l.i > 0 && l.since && Date.now() - l.since > 8000 && l.inflight.size) requeueLane(l);
+    for (const l of lanes) if (laneUp(l) && !l.working && (jobs.requeue.length || jugFiles.some(x => !x.started) || (jobs.file && jobs.next < jobs.file.slices))) startWorker(l);
   }, 250);
-  const live = () => my === session && ch === dc && ch.readyState === 'open';
   try {
-    ch.send(JSON.stringify({ t: 'batch' }));
-    while (jugFiles.length) {
-      await waitPour(); if (!live()) return;
-      const it = jugFiles[0], f = it.file;              // first in, first out
-      idx++;
-      const of = idx - 1 + jugFiles.length;
-      batch.ids.add(it.id); batch.total = idx;
-      const cnt = it.el.querySelector('.cnt'); cnt.hidden = false; cnt.textContent = `${idx} of ${of}`;
-      setStatus(`Pouring ${idx} of ${of} · ${f.name}`);
-      ch.send(JSON.stringify({ t: 'meta', id: it.id, name: f.name, size: f.size, type: f.type, idx, of, slice: SLICE }));
-      // Read and fingerprint the next slice while the current one is sending.
-      let next = f.size ? readSlice(f, 0) : null, si = 0;
-      for (let off = 0; off < f.size; off += SLICE, si++) {
-        const { buf, h } = await next;
-        next = off + SLICE < f.size ? readSlice(f, off + SLICE) : null;
-        ch.send(JSON.stringify({ t: 'h', i: si, h }));
-        for (let p = 0; p < buf.byteLength; p += CH) {
-          if (!pouring) await waitPour();
-          if (ch.bufferedAmount > HIGH) await waitDrain(ch);
-          if (!live()) return;
-          ch.send(buf.slice(p, p + CH));
-          const n = Math.min(CH, buf.byteLength - p); it.sent += n; bytes += n;
-        }
-        it.el.querySelector('.bar b').style.width = (it.sent / f.size * 100) + '%';
-        renderJug();
-      }
-      ch.send(JSON.stringify({ t: 'end', id: it.id }));
-      cnt.textContent = `✓ ${idx} of ${of}`;
-      it.el.classList.add('done', 'leaving');
-      const el = it.el; setTimeout(() => el.remove(), 700);
-      jugFiles.shift(); renderJug();
-    }
-    ch.send(JSON.stringify({ t: 'done', count: idx }));
-    batch.bytes = bytes; batch.t1 = performance.now(); batch.done = true;
-    reportBatch();
+    dc.send(JSON.stringify({ t: 'batch' }));
+    await new Promise(res => {
+      jobs.check = () => {
+        const more = jobs.requeue.length || jugFiles.some(x => !x.started) || (jobs.file && jobs.next < jobs.file.slices);
+        const flying = lanes.some(l => l && l.inflight.size);
+        if (!more && !flying && !lanes.some(l => l && l.working)) res();
+        else for (const l of lanes) if (laneUp(l) && !l.working && more) startWorker(l);
+      };
+      for (const l of lanes) startWorker(l);
+      const watch = setInterval(() => { if (my !== session || !jobs) { clearInterval(watch); return res(); } jobs.check(); if (!lanes.some(l => l && l.inflight.size) && !lanes.some(l => l && l.working) && !jobs.requeue.length && !jugFiles.some(x => !x.started) && !(jobs.file && jobs.next < jobs.file.slices)) { clearInterval(watch); res(); } }, 500);
+    });
+    if (my !== session) return;
+    dc.send(JSON.stringify({ t: 'done', count: pourBatch.total }));
+    pourBatch.bytes = jobs.bytes; pourBatch.t1 = performance.now(); pourBatch.done = true;
+    if (pourBatch.ids.size) setStatus(`Poured ${pourBatch.total} of ${pourBatch.total} · waiting for the other phone to confirm…`, true);
+    else finishPour();
     if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
   } catch(e) { if (my === session) setStatus('Pour stopped: the connection dropped.'); }
   finally {
     clearInterval(tick);
-    if (my === session) { sending = false; const el = $('#speed'); if (el) el.textContent = ''; }
+    if (my === session) { sending = false; jobs = null; const el = $('#speed'); if (el) el.textContent = ''; }
   }
+}
+// Files added while a pour is running start right after the current ones.
+function pourFiles(){ if (jobs) jobs.check(); }
+function finishPour(){
+  reportBatch();
+  pourOn = false;
+  const p = $('#pause'); if (p) p.hidden = true;
+  stopKeepAlive(); unlockRotation();
+  if (jugFiles.length && !sending) setStatus(`${jugFiles.length} file${jugFiles.length>1?'s':''} in the jug · tilt to pour`);
+}
+
+/* ---------- messages on any lane ---------- */
+function laneRx(l, e){
+  if (typeof e.data === 'string') {
+    let m; try { m = JSON.parse(e.data); } catch(_){ return; }
+    if (m.t === 's') { l.cur = { f: m.f, i: m.i, n: m.n, h: m.h, parts: [], got: 0 }; if (!m.n) sliceDone(l); return; }
+    if (m.t === 'bye') return peerGone();
+    if (m.t === 'lane') return onLaneOffer(m);
+    if (m.t === 'lane-ans') return onLaneAnswer(m);
+    if (role === 'jug') { if (m.t === 'ack') onAck(m); else if (m.t === 'sa') onSliceAck(m); return; }
+    return onControl(m);
+  }
+  const c = l.cur; if (!c) return;
+  c.parts.push(e.data); c.got += e.data.byteLength;
+  const file = rxFiles.get(c.f);
+  if (file && !file.slices[c.i]) { file.got += e.data.byteLength; if (rx) rx.bytes += e.data.byteLength; }
+  if (c.got >= c.n) sliceDone(l);
+  scheduleUI();
 }
 
 /* ---------- CONTAINER stage: catch + save ---------- */
-let received = [], current = null, rx = null, rxTick = null, uiPending = false;
+let received = [], current = null, rx = null, rxTick = null, uiPending = false, rxFiles = new Map();
 function contStage(){
   view.className = 'work';
   view.innerHTML = `
@@ -1054,7 +1318,7 @@ function contStage(){
       <div class="gauge" id="gauge"></div>
     </div>
     <div class="dock" id="dock"><div class="safety" id="safety" hidden></div><div class="status" id="status"></div><div id="saveArea"></div></div>`;
-  dc.onmessage = onRx;
+  dc.onmessage = e => laneRx(mainLane(), e);
 }
 function startRxBatch(){
   clearInterval(rxTick);
@@ -1066,61 +1330,67 @@ function startRxBatch(){
   }, 250);
   $('#empty').hidden = true;
   $('#saveArea').innerHTML = '';
+  startKeepAlive(); lockRotation();
 }
 let finalizing = Promise.resolve(), damaged = 0;
-function checkSlice(c){
-  const parts = c.pend, i = c.sliceI++;
-  c.pend = []; c.pendBytes = 0;
-  c.verify = c.verify.then(async ok => {
-    const d = hex(await crypto.subtle.digest('SHA-256', await new Blob(parts).arrayBuffer()));
-    return ok && d === c.hashes[i];
+function onControl(m){
+  if (m.t === 'batch') { startRxBatch(); damaged = 0; }
+  else if (m.t === 'meta') {
+    if (!rx) startRxBatch();
+    const el = document.createElement('div'); el.className = 'tile arriving'; el.innerHTML = tileHTML(m.name, m.size);
+    const cnt = el.querySelector('.cnt'); cnt.hidden = false; cnt.textContent = `${m.idx} of ${m.of}`;
+    $('#inside').appendChild(el);                    // column-reverse: first file settles at the bottom
+    let finish; const whenDone = new Promise(r => finish = r);
+    const c = { ...m, slices: new Array(m.slices), have: 0, got: 0, ok: true, el, finish };
+    rxFiles.set(m.id, c);
+    if (!current) current = c;
+    const waiting = early.get(m.id); early.delete(m.id);
+    if (waiting) for (const s of waiting) { c.got += s.got; if (rx) rx.bytes += s.got; storeSlice(s); }
+    rx.of = m.of; rx.t0 = rx.t0 || performance.now();
+    if (!m.slices) finish();
+    finalizing = finalizing.then(() => whenDone).then(() => finishFile(c));
+    scheduleUI();
+  }
+  else if (m.t === 'done') { const n = m.count; finalizing = finalizing.then(() => finishRx(n)); }
+}
+// A whole slice has arrived on a lane: keep it on disk-backed storage (not in memory),
+// check its fingerprint and confirm it to the Jug.
+const early = new Map();   // slices that beat their file's details here (lanes are separate connections)
+function sliceDone(l){
+  const s = l.cur; l.cur = null;
+  storeSlice(s);
+}
+function storeSlice(s){
+  const c = rxFiles.get(s.f);
+  if (!c) { if (!early.has(s.f)) early.set(s.f, []); early.get(s.f).push(s); return; }
+  if (c.slices[s.i]) { sendCtl({ t: 'sa', f: s.f, i: s.i }); return; }      // a repeat of a slice we already have
+  const blob = new Blob(s.parts);
+  c.slices[s.i] = blob;
+  sendCtl({ t: 'sa', f: s.f, i: s.i });
+  blob.arrayBuffer().then(b => crypto.subtle.digest('SHA-256', b)).then(d => {
+    if (hex(d) !== s.h) c.ok = false;
+    if (++c.have === c.slices.length) c.finish();
   });
 }
-function onRx(e){
-  if (typeof e.data === 'string') {
-    const m = JSON.parse(e.data);
-    if (m.t === 'bye') return peerGone();
-    if (m.t === 'batch') { startRxBatch(); damaged = 0; }
-    else if (m.t === 'meta') {
-      if (!rx) startRxBatch();
-      const el = document.createElement('div'); el.className = 'tile arriving'; el.innerHTML = tileHTML(m.name, m.size);
-      const cnt = el.querySelector('.cnt'); cnt.hidden = false; cnt.textContent = `${m.idx} of ${m.of}`;
-      $('#inside').appendChild(el);                    // column-reverse: first file settles at the bottom
-      current = { ...m, chunks: [], got: 0, el, hashes: [], pend: [], pendBytes: 0, sliceI: 0, verify: Promise.resolve(true) };
-      rx.idx = m.idx; rx.of = m.of; rx.t0 = rx.t0 || performance.now();
-      scheduleUI();
-    }
-    else if (m.t === 'h' && current) current.hashes[m.i] = m.h;
-    else if (m.t === 'end' && current) {
-      const c = current; current = null;
-      if (c.pendBytes) checkSlice(c);
-      const okSize = c.got === c.size;
-      finalizing = finalizing.then(async () => {
-        const ok = (await c.verify) && okSize;
-        const file = ok ? new File(c.chunks, c.name, { type: c.type || 'application/octet-stream' }) : null;
-        c.chunks = null;
-        c.el.classList.add(ok ? 'done' : 'bad');
-        c.el.querySelector('.bar b').style.width = '100%';
-        c.el.querySelector('.cnt').textContent = ok ? `✓ ${c.idx} of ${c.of}` : `✗ damaged`;
-        if (ok) received.push(file); else damaged++;
-        try { dc && dc.readyState === 'open' && dc.send(JSON.stringify({ t: 'ack', id: c.id, ok })); } catch(e){}
-        if (navigator.vibrate) navigator.vibrate(10);
-        scheduleUI();
-      });
-    }
-    else if (m.t === 'done') { const n = m.count; finalizing = finalizing.then(() => finishRx(n)); }
-    return;
-  }
-  const c = current; if (!c) return;
-  c.chunks.push(e.data); c.pend.push(e.data);
-  c.got += e.data.byteLength; c.pendBytes += e.data.byteLength; rx.bytes += e.data.byteLength;
-  if (c.pendBytes >= c.slice) checkSlice(c);
+function sendCtl(m){ try { if (dc && dc.readyState === 'open') dc.send(JSON.stringify(m)); } catch(e){} }
+function finishFile(c){
+  const okSize = c.slices.reduce((a, b) => a + (b ? b.size : 0), 0) === c.size;
+  const ok = c.ok && okSize;
+  const file = ok ? new File(c.slices, c.name, { type: c.type || 'application/octet-stream' }) : null;
+  c.slices = null; rxFiles.delete(c.id);
+  if (current === c) current = [...rxFiles.values()][0] || null;
+  c.el.classList.add(ok ? 'done' : 'bad');
+  c.el.querySelector('.bar b').style.width = '100%';
+  c.el.querySelector('.cnt').textContent = ok ? `✓ ${c.idx} of ${c.of}` : `✗ damaged`;
+  if (ok) received.push(file); else damaged++;
+  sendCtl({ t: 'ack', id: c.id, ok });
+  if (navigator.vibrate) navigator.vibrate(10);
   scheduleUI();
 }
 // Draw progress at most once per frame instead of on every chunk.
 function scheduleUI(){ if (uiPending) return; uiPending = true; requestAnimationFrame(() => { uiPending = false; drawRx(); }); }
 function drawRx(){
-  if (!rx || !$('#fill')) return;
+  if (role !== 'container' || !rx || !$('#fill')) return;
   const doneN = received.length - rx.start, frac = current && current.size ? current.got / current.size : 0;
   $('#fill').style.height = Math.min(92, ((doneN + frac) / (rx.of || 1)) * 92) + '%';
   if (current) {
@@ -1139,6 +1409,7 @@ function finishRx(count){
   track('receive_complete', { files: count, mb: Math.round(bytes / 1048576), seconds: Math.round(secs), damaged });
   remember({ title: damaged ? 'Received with errors' : 'Files received', text: `${count - damaged} of ${count} file${count > 1 ? 's' : ''} received and verified · ${fmt(bytes)} in ${dur(secs)}` });
   $('#gauge').textContent = `${received.length} file${received.length>1?'s':''} ready to save`;
+  stopKeepAlive(); unlockRotation();
   showSaveCard();
 }
 function showSaveCard(){
