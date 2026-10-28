@@ -1,7 +1,7 @@
 {
-  "name": "Pourr",
-  "short_name": "Pourr",
-  "description": "Tilt to share files, just like pouring water.",
+  "name": "Pourr FT",
+  "short_name": "Pourr FT",
+  "description": "File transfers made simple and secure.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

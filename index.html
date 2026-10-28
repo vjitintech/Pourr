@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0d1b26">
-<title>Pourr</title>
-<meta name="description" content="Tilt to share files, just like pouring water.">
+<title>Pourr FT</title>
+<meta name="description" content="Pourr FT: file transfers made simple and secure. Tilt to pour files from one phone into another.">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -48,8 +48,12 @@ body{background:var(--bg);color:var(--fg);font:15px/1.5 var(--body);
   -webkit-tap-highlight-color:transparent;overflow:hidden}
 .app{height:100%;max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:12px;padding-block:14px}
 header{display:flex;align-items:center;justify-content:space-between;gap:12px}
-.brand{font:800 22px/1 var(--display);letter-spacing:-.02em}
-.brand span{color:var(--water)}
+.brand{display:grid;grid-template-columns:minmax(0,1fr);gap:3px;min-width:0;flex:1 1 auto;color:var(--fg);text-decoration:none}
+header .hdr-right{flex:0 0 auto}
+.brand-name{font:800 22px/1 var(--display);letter-spacing:-.02em;white-space:nowrap}
+.brand-name .dot{color:var(--water)}
+.brand-name sup{font-size:.56em;font-weight:800;letter-spacing:.03em;color:var(--water);vertical-align:.62em;line-height:0;margin-left:.5px}
+.brand-tag{font-size:11.5px;line-height:1.2;color:var(--muted);letter-spacing:.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pill{font:500 12px/1 var(--mono);padding:7px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted);display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
 .pill i{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
 .pill.on i{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 25%,transparent)}
@@ -140,8 +144,9 @@ main.work .dock{max-height:46dvh;overflow-y:auto;width:100%;max-width:560px;just
   main.work .dock{max-height:100%;justify-self:stretch}
 }
 @media (max-height:600px){.app{gap:8px;padding-block:8px} h1{font-size:26px;margin-top:2px} .role{padding:12px} .role svg{width:40px;height:40px} .btn{min-height:44px;padding:11px 14px}}
-@media (max-width:380px){.brand{font-size:19px} .roles{grid-template-columns:1fr} .role{display:grid;grid-template-columns:44px 1fr;align-items:center;column-gap:12px} .role svg{width:44px;height:44px;grid-row:span 2} .pill{padding:6px 8px}}
+@media (max-width:380px){.brand-name{font-size:18px} .brand-tag{font-size:10.5px} .roles{grid-template-columns:1fr} .role{display:grid;grid-template-columns:44px 1fr;align-items:center;column-gap:12px} .role svg{width:44px;height:44px;grid-row:span 2} .pill{padding:6px 8px}}
 @media (max-width:340px){#linkText{display:none}}
+@media (max-width:400px){body:has(#exit:not([hidden])) #linkText{display:none} body:has(#exit:not([hidden])) .pill{padding:8px}}
 .scanner{position:fixed;inset:0;z-index:50;background:rgba(4,12,18,.94);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
   padding:max(16px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
 .scanner .cam{width:min(92vw,520px,70dvh);max-width:100%}
@@ -176,7 +181,10 @@ details.card summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font
 <body>
 <div class="app">
   <header>
-    <div class="brand">Pourr<span>.</span></div>
+    <a class="brand" href="./" aria-label="Pourr FT home">
+      <span class="brand-name">Pourr<span class="dot">.</span><sup>FT</sup></span>
+      <span class="brand-tag">File transfers made simple and secure</span>
+    </a>
     <div class="hdr-right">
       <div class="pill" id="link"><i></i><span id="linkText">Not paired</span></div>
       <button class="btn ghost small" id="exit" hidden>Exit</button>
@@ -533,7 +541,7 @@ function home(){
     <footer class="foot">
       <p>Free, supported by ads. Files go straight from phone to phone, encrypted.</p>
       <p>Contact us: <a href="mailto:${CONTACT}" id="mail">${CONTACT}</a> <button class="linkbtn" id="copyMail">Copy</button> · <a href="privacy.html">Privacy</a></p>
-      <p>© ${YEAR} Pourr. All rights reserved.</p>
+      <p>© ${YEAR} Pourr FT. All rights reserved.</p>
     </footer>`;
   loadAnalytics();
   placeAd($('#adHome'), CONFIG.adSlots.home);
@@ -580,7 +588,7 @@ async function jugPair(){
     <button class="btn ghost" id="back">Back</button>`;
   $('#back').onclick = exitToHome;
   $('#copy').onclick = () => { copyText(code, $('#myCode')); $('#copy').textContent = 'Copied'; };
-  if ($('#shareLink')) $('#shareLink').onclick = () => shareCode(link, 'Open this link to receive files with Pourr:');
+  if ($('#shareLink')) $('#shareLink').onclick = () => shareCode(link, 'Open this link to receive files with Pourr FT:');
   let timer = null;
   const accept = async (c) => {
     try {
