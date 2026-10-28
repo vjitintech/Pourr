@@ -12,11 +12,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="referrer" content="no-referrer">
 <script>
-/* Transfer screens (?m=jug, ?m=cont, or a shared #o= link) run with a strict security policy:
+/* Transfer screens (?m=jug, ?m=cont, or a shared #o= / #a= link) run with a strict security policy:
    only Pourr's own code may run and nothing can be sent to any other site. Ads and analytics
    live only on the home screen, which never holds files. */
 (function(){
-  if (!/[?&]m=(jug|cont)\b/.test(location.search) && !/^#o=/.test(location.hash)) return;
+  if (!/[?&]m=(jug|cont)\b/.test(location.search) && !/^#[oa]=/.test(location.hash)) return;
   var m = document.createElement('meta');
   m.httpEquiv = 'Content-Security-Policy';
   m.content = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self'; worker-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
@@ -224,9 +224,12 @@ const JUG_SVG = `<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M18 14h24l
 const CONT_SVG = `<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M12 10h40l-4 44a6 6 0 0 1-6 5H22a6 6 0 0 1-6-5z" fill="none" stroke="var(--water)" stroke-width="4" stroke-linejoin="round"/><path d="M15 34h34l-2 20a4 4 0 0 1-4 3H21a4 4 0 0 1-4-3z" fill="var(--water)" opacity=".7"/></svg>`;
 
 /* ---------- signaling codec (SDP -> deflate -> base64url) ---------- */
-async function pack(desc){
+const ufragOf = sdp => ((sdp || '').match(/a=ice-ufrag:(\S+)/) || [])[1] || '';
+// forOffer: on a reply, the pairing code it answers, so the Jug can spot a reply to an old code.
+async function pack(desc, forOffer){
   // Drop TCP candidates: they are rarely used and make the QR code denser.
-  const sdp = desc.sdp.split('\r\n').filter(l => !/^a=candidate:\S+ \d+ tcp /i.test(l)).join('\r\n');
+  let sdp = desc.sdp.split('\r\n').filter(l => !/^a=candidate:\S+ \d+ tcp /i.test(l)).join('\r\n');
+  if (forOffer) sdp += 'a=x-pourr-for:' + forOffer + '\r\n';
   const raw = new TextEncoder().encode(desc.type[0] + sdp);
   let bytes = raw;
   if ('CompressionStream' in window) {
@@ -236,21 +239,45 @@ async function pack(desc){
   }
   return 'R' + b64(bytes);
 }
+// Accepts a bare code, a link, or a whole chat message that contains one (labels and line breaks are ignored).
+function extractCode(text){
+  const t = String(text || '').replace(/\s+/g, '');
+  const h = t.match(/#[oa]=([A-Za-z0-9_-]+)/); if (h) return h[1];
+  const all = t.match(/[ZR][A-Za-z0-9_-]{40,}/g);
+  return all ? all.sort((a, b) => b.length - a.length)[0] : t;
+}
 async function unpack(code){
-  code = code.trim().replace(/\s+/g, '');
-  const h = code.match(/#[oa]=(.+)$/); if (h) code = h[1];
-  const kind = code[0], bytes = unb64(code.slice(1));
+  code = extractCode(code);
+  if (!code) throw new Error('Paste the code or link first.');
+  const kind = code[0];
+  let bytes; try { bytes = unb64(code.slice(1)); } catch(e){ throw new Error('That code is incomplete. Copy the whole message again.'); }
   let txt;
   if (kind === 'Z') {
-    const ds = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-    txt = await new Response(ds).text();
+    try {
+      const ds = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+      txt = await new Response(ds).text();
+    } catch(e){ throw new Error('That code is incomplete. Copy the whole message again.'); }
   } else if (kind === 'R') txt = new TextDecoder().decode(bytes);
   else throw new Error('That code is not from Pourr.');
-  return { type: txt[0] === 'o' ? 'offer' : 'answer', sdp: txt.slice(1) };
+  let sdp = txt.slice(1), forOffer = '';
+  sdp = sdp.replace(/a=x-pourr-for:(\S+)\r\n/, (m, u) => { forOffer = u; return ''; });
+  if (!/^v=0/.test(sdp)) throw new Error('That code is not from Pourr.');
+  return { type: txt[0] === 'o' ? 'offer' : 'answer', sdp, forOffer };
 }
 function b64(u8){ let s=''; for (let i=0;i<u8.length;i+=0x8000) s += String.fromCharCode.apply(null, u8.subarray(i,i+0x8000)); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 function unb64(s){ s = s.replace(/-/g,'+').replace(/_/g,'/'); while (s.length%4) s+='='; const b = atob(s); const u = new Uint8Array(b.length); for (let i=0;i<b.length;i++) u[i]=b.charCodeAt(i); return u; }
-function waitIce(pc){ return new Promise(res => { if (pc.iceGatheringState === 'complete') return res(); const t = setTimeout(res, 3500); pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } }); }); }
+// Waits for the phone's addresses. Mobile networks can be slow to answer the public address lookup,
+// and a code made without the internet address only works on the same network.
+function waitIce(pc){
+  return new Promise(res => {
+    if (pc.iceGatheringState === 'complete') return res();
+    let early = null;
+    const done = () => { clearTimeout(t); clearTimeout(early); res(); };
+    const t = setTimeout(done, 8000);
+    pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') done(); });
+    pc.addEventListener('icecandidate', e => { if (e.candidate && / typ srflx /.test(e.candidate.candidate) && !early) early = setTimeout(done, 2000); });
+  });
+}
 
 /* Libraries load only when needed, from Pourr's own site (cached for offline use). */
 const libs = {};
@@ -325,6 +352,43 @@ async function scanButton(errEl, onCode){
   try { const v = await openScanner(); if (v) onCode(v); }
   catch(e){ errEl.textContent = camError(e); }
 }
+// Reads a QR code from a photo or screenshot, e.g. one a friend sent in a chat app.
+async function scanImage(file){
+  const img = await createImageBitmap(file);
+  try {
+    if ('BarcodeDetector' in window && (await BarcodeDetector.getSupportedFormats()).includes('qr_code')) {
+      const r = await new BarcodeDetector({ formats: ['qr_code'] }).detect(img);
+      if (r[0]) return r[0].rawValue;
+    }
+  } catch(e){}
+  if (typeof jsQR === 'undefined') await loadScript('lib/jsQR.min.js');
+  for (const max of [1600, 1000, 2400]) {
+    const k = Math.min(1, max / Math.max(img.width, img.height));
+    const w = Math.round(img.width * k), h = Math.round(img.height * k);
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    const cx = cv.getContext('2d', { willReadFrequently: true });
+    cx.fillStyle = '#fff'; cx.fillRect(0, 0, w, h); cx.drawImage(img, 0, 0, w, h);
+    const r = jsQR(cx.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: 'attemptBoth' });
+    if (r) return r.data;
+  }
+  return null;
+}
+function wireImageScan(btn, input, errEl, onCode){
+  btn.onclick = () => input.click();
+  input.onchange = async () => {
+    const f = input.files && input.files[0]; input.value = '';
+    if (!f) return;
+    errEl.textContent = 'Reading the screenshot…';
+    try { const v = await scanImage(f); if (v) { errEl.textContent = ''; onCode(v); } else errEl.textContent = 'No QR code found in that picture. Try a clearer screenshot, or paste the code.'; }
+    catch(e){ errEl.textContent = 'Could not read that picture. Paste the code instead.'; }
+  };
+}
+async function pasteFromClipboard(ta, onCode, errEl){
+  try { const t = await navigator.clipboard.readText(); if (t) { ta.value = t; return onCode(t); } }
+  catch(e){}
+  ta.closest('details').open = true; ta.focus();
+  errEl.textContent = 'Long-press the box below and choose Paste, then tap Connect.';
+}
 
 /* ---------- app owner settings (see SETUP.md) ---------- */
 const CONFIG = {
@@ -341,7 +405,8 @@ const YEAR = 2026;
 /* ---------- screen mode: home (ads, analytics) or a clean transfer screen ---------- */
 const MODE = new URLSearchParams(location.search).get('m');          // 'jug' | 'cont' | null
 const LINK_OFFER = (location.hash.match(/^#o=(.+)$/) || [])[1] || null;
-const CLEAN = MODE === 'jug' || MODE === 'cont' || !!LINK_OFFER;
+const LINK_REPLY = (location.hash.match(/^#a=(.+)$/) || [])[1] || null;
+const CLEAN = MODE === 'jug' || MODE === 'cont' || !!LINK_OFFER || !!LINK_REPLY;
 function goRole(r){
   let gone = false;
   const go = () => { if (!gone) { gone = true; location.href = location.pathname + '?m=' + r; } };
@@ -469,7 +534,9 @@ function showHotspotHelp(){
   view.innerHTML = `
     <div class="card">
       <h2>These networks won't connect directly</h2>
-      <p>Some mobile networks block phone-to-phone connections. A hotspot fixes it in a few seconds, works without internet, and is the fastest way to pour.</p>
+      <p>Some networks block direct phone-to-phone connections. Pourr never sends your files through a server, so try another network instead.</p>
+      <p><b>Far apart:</b> put one phone on a different network (switch from mobile data to home Wi-Fi, or the other way round), allow the camera if asked, then tap <b>Pair again</b> on both phones and send a fresh link.</p>
+      <p><b>Side by side:</b> a hotspot always works, needs no internet, and is the fastest way to pour.</p>
       <ol class="steps">
         <li>${r === 'jug' ? 'On this phone (the Jug)' : 'On the Jug phone'}, turn on <b>Mobile hotspot</b> in Settings.</li>
         <li>${r === 'jug' ? 'On the Container phone' : 'On this phone (the Container)'}, join that hotspot's Wi-Fi.</li>
@@ -585,36 +652,102 @@ async function jugPair(){
   stopCamera();                                        // release it; the scanner opens a fresh camera later
   if (my !== session) return;
   const code = await pack(pc.localDescription);
+  const myUfrag = ufragOf(pc.localDescription.sdp);
   const link = location.origin + location.pathname + '#o=' + code;
+  // A code shared earlier dies if the phone closed this page in the background (common while switching to a chat app).
+  let lost = false;
+  try { lost = !!document.wasDiscarded || sessionStorage.getItem('pourr.offerShared') === '1'; sessionStorage.removeItem('pourr.offerShared'); } catch(e){}
   view.innerHTML = `
+    ${lost ? `<div class="card banner"><h2>Send the new link</h2><p>This page was closed in the background, so the link you shared before no longer works. Share this new one.</p></div>` : ''}
     <div class="card">
       <h2>Step 1 · Container scans this</h2>
       <div class="qr"><img alt="Pairing code" src="${await qrImg(code)}"></div>
-      <div class="row">${navigator.share ? '<button class="btn ghost" id="shareLink">Share link</button>' : ''}<button class="btn ghost" id="copy">Copy code</button></div>
-      <p class="note">Far apart? Share the link through any chat app and open it on the receiving phone.</p>
-      <textarea id="myCode" readonly hidden>${code}</textarea>
+      <div class="row">${navigator.share ? '<button class="btn ghost" id="shareLink">Share link</button>' : ''}<button class="btn ghost" id="copy">Copy link</button></div>
+      <p class="note">Far apart? Share the link in any chat app. Keep this page open until the phones pair.</p>
+      <textarea id="myCode" readonly hidden>${link}</textarea>
     </div>
     <div class="card">
-      <h2>Step 2 · Scan the Container's reply</h2>
-      <button class="btn clay" id="scanReply">Scan reply code</button>
-      <details><summary>Paste the reply code instead</summary><textarea id="paste" placeholder="Paste reply code"></textarea><button class="btn ghost" id="usePaste" style="margin-top:8px">Connect</button></details>
+      <h2>Step 2 · Get the Container's reply</h2>
+      <p class="note">Far apart: tap the reply link your friend sends you, or paste it here.</p>
+      <div class="row"><button class="btn clay" id="pasteReply">Paste reply</button><button class="btn ghost" id="scanReply">Scan reply code</button></div>
+      <button class="btn ghost" id="shotReply" style="margin-top:8px">Read a screenshot of the reply</button>
+      <input type="file" id="shot" accept="image/*" hidden>
+      <details><summary>Type or paste the reply by hand</summary><textarea id="paste" placeholder="Paste the reply link or code"></textarea><button class="btn ghost" id="usePaste" style="margin-top:8px">Connect</button></details>
       <div class="err" id="err" aria-live="polite"></div>
     </div>
     <button class="btn ghost" id="back">Back</button>`;
   $('#back').onclick = exitToHome;
-  $('#copy').onclick = () => { copyText(code, $('#myCode')); $('#copy').textContent = 'Copied'; };
-  if ($('#shareLink')) $('#shareLink').onclick = () => shareCode(link, 'Open this link to receive files with Pourr FT:');
-  let timer = null;
+  const shared = () => { try { sessionStorage.setItem('pourr.offerShared', '1'); } catch(e){} };
+  $('#copy').onclick = () => { copyText(link, $('#myCode')); $('#copy').textContent = 'Copied'; shared(); };
+  if ($('#shareLink')) $('#shareLink').onclick = () => { shared(); shareCode(link, 'Open this link to receive files with Pourr FT:'); };
+  let timer = null, accepted = false;
   const accept = async (c) => {
+    if (accepted) return true;
     try {
-      const d = await unpack(c); if (d.type !== 'answer') throw new Error('That is a pairing code. Scan the reply code from the Container phone.');
-      await pc.setRemoteDescription(d); $('#err').textContent = 'Connecting…';
+      const d = await unpack(c); if (d.type !== 'answer') throw new Error('That is your own pairing link. Paste the reply your friend sent back.');
+      if (d.forOffer && d.forOffer !== myUfrag) throw new Error('That reply is for an older pairing link. Share the link on this screen again and ask for a new reply.');
+      accepted = true;
+      await pc.setRemoteDescription({ type: d.type, sdp: d.sdp }); $('#err').textContent = 'Connecting…';
       clearTimeout(timer);
-      timer = setTimeout(() => { if (my === session && (!dc || dc.readyState !== 'open')) showHotspotHelp(); }, 12000);
-    } catch(e){ $('#err').textContent = e.message || 'That code did not work. Try again.'; }
+      timer = setTimeout(() => { if (my === session && (!dc || dc.readyState !== 'open')) showHotspotHelp(); }, 25000);
+      return true;
+    } catch(e){ $('#err').textContent = e.message || 'That code did not work. Try again.'; return false; }
   };
   $('#scanReply').onclick = () => scanButton($('#err'), accept);
   $('#usePaste').onclick = () => accept($('#paste').value);
+  $('#pasteReply').onclick = () => pasteFromClipboard($('#paste'), accept, $('#err'));
+  wireImageScan($('#shotReply'), $('#shot'), $('#err'), accept);
+  listenForReply(myUfrag, accept);
+}
+
+// A reply link opened in another tab of this browser hands its code to this page.
+function listenForReply(myUfrag, accept){
+  const handle = async (m) => {
+    if (!m || m.t !== 'reply' || !m.c) return;
+    let d; try { d = await unpack(m.c); } catch(e){ return; }
+    if (d.type !== 'answer' || (d.forOffer && d.forOffer !== myUfrag)) return;
+    const ok = await accept(m.c);
+    if (ok) post({ t: 'got', id: m.id });
+  };
+  let bc = null;
+  const post = (m) => { try { if (bc) bc.postMessage(m); } catch(e){} try { localStorage.setItem('pourr.msg', JSON.stringify(m)); localStorage.removeItem('pourr.msg'); } catch(e){} };
+  try { bc = new BroadcastChannel('pourr'); bc.onmessage = e => handle(e.data); } catch(e){}
+  addEventListener('storage', e => { if (e.key === 'pourr.msg' && e.newValue) { try { handle(JSON.parse(e.newValue)); } catch(_){} } });
+}
+
+/* ---------- REPLY LINK: opened on the Jug phone, delivers the reply to the waiting Jug page ---------- */
+function deliverReply(code){
+  view.className = 'pair';
+  view.innerHTML = `<div class="card"><h2>Connecting to your Jug…</h2><p>Handing the reply to the Pourr page that made the pairing link.</p></div>`;
+  const id = Math.random().toString(36).slice(2);
+  let got = false, bc = null;
+  const onMsg = (m) => {
+    if (got || !m || m.t !== 'got' || m.id !== id) return;
+    got = true;
+    view.innerHTML = `<div class="card"><h2>Reply delivered</h2><p>Go back to your other Pourr tab. It's connecting now, and the jug appears there once the phones pair.</p><button class="btn ghost" id="closeMe">Close this tab</button></div>`;
+    $('#closeMe').onclick = () => { window.close(); goHome(); };
+    setTimeout(() => { try { window.close(); } catch(e){} }, 1500);
+  };
+  try { bc = new BroadcastChannel('pourr'); bc.onmessage = e => onMsg(e.data); } catch(e){}
+  addEventListener('storage', e => { if (e.key === 'pourr.msg' && e.newValue) { try { onMsg(JSON.parse(e.newValue)); } catch(_){} } });
+  const msg = { t: 'reply', c: code, id };
+  try { if (bc) bc.postMessage(msg); } catch(e){}
+  try { localStorage.setItem('pourr.msg', JSON.stringify(msg)); localStorage.removeItem('pourr.msg'); } catch(e){}
+  setTimeout(() => {
+    if (got) return;
+    const link = location.origin + location.pathname + '#a=' + code;
+    view.innerHTML = `
+      <div class="card">
+        <h2>Couldn't find your Jug page</h2>
+        <p>Open Pourr in the browser where you made the pairing link, tap <b>Paste reply</b>, and paste this reply.</p>
+        <p class="note">If that page was closed, start again: tap Jug, then share the new link.</p>
+        <button class="btn clay" id="copyReply">Copy reply</button>
+        <textarea id="myCode" readonly hidden>${link}</textarea>
+      </div>
+      <button class="btn ghost" id="back">Back to home</button>`;
+    $('#copyReply').onclick = () => { copyText(link, $('#myCode')); $('#copyReply').textContent = 'Copied'; };
+    $('#back').onclick = goHome;
+  }, 2500);
 }
 
 /* ---------- CONTAINER: pairing ---------- */
@@ -625,40 +758,53 @@ async function contPair(preset){
     <div class="card">
       <h2>Step 1 · Scan the Jug's code</h2>
       <button class="btn water" id="scan">Scan pairing code</button>
+      <button class="btn ghost" id="shotOffer" style="margin-top:8px">Read a screenshot of the code</button>
+      <input type="file" id="shot" accept="image/*" hidden>
       <details><summary>Paste the code or link instead</summary><textarea id="paste" placeholder="Paste pairing code or link"></textarea><button class="btn ghost" id="usePaste" style="margin-top:8px">Continue</button></details>
       <div class="err" id="err" aria-live="polite"></div>
     </div>
     <button class="btn ghost" id="back">Back</button>`;
   $('#back').onclick = exitToHome;
   const my = session;
+  let camAsked = false;
   const accept = async (c) => {
     try {
       const d = await unpack(c); if (d.type !== 'offer') throw new Error('That is a reply code. Scan the pairing code from the Jug phone.');
+      // Browsers only reveal the phone's real network addresses (including the direct IPv6 route most
+      // Indian mobile networks offer) once the camera is allowed. Opened from a link, the camera hasn't been asked yet.
+      if (!camStream && preset && !camAsked) {
+        camAsked = true;
+        $('#err').innerHTML = 'Allow the camera if asked. It helps the phones find a direct route across networks; you won\'t need to scan. <button class="btn ghost" id="skipCam" style="margin-top:8px">Continue without camera</button>';
+        await Promise.race([warmCamera().catch(() => {}), new Promise(r => { $('#skipCam').onclick = r; })]);
+      }
       $('#err').textContent = 'Preparing your reply code…';
       await newPeer();
       if (my !== session) return;
       pc.ondatachannel = e => wireChannel(e.channel, contStage);
-      await pc.setRemoteDescription(d);
+      await pc.setRemoteDescription({ type: d.type, sdp: d.sdp });
       await pc.setLocalDescription(await pc.createAnswer());
       await waitIce(pc);
+      stopCamera();
       if (my !== session) return;
-      const code = await pack(pc.localDescription);
+      const code = await pack(pc.localDescription, ufragOf(d.sdp));
+      const link = location.origin + location.pathname + '#a=' + code;
       view.innerHTML = `
         <div class="card">
-          <h2>Step 2 · Jug scans this reply</h2>
+          <h2>Step 2 · Send this reply to the Jug</h2>
           <div class="qr"><img alt="Reply code" src="${await qrImg(code)}"></div>
-          <div class="row">${navigator.share ? '<button class="btn ghost" id="shareCode">Share code</button>' : ''}<button class="btn ghost" id="copy">Copy code</button></div>
-          <p class="note">This screen switches to the container as soon as the phones connect. Far apart? Share the code and paste it on the Jug phone.</p>
-          <textarea id="myCode" readonly hidden>${code}</textarea>
+          <div class="row">${navigator.share ? '<button class="btn water" id="shareCode">Share reply link</button>' : ''}<button class="btn ghost" id="copy">Copy reply link</button></div>
+          <p class="note">Nearby: the Jug scans this. Far apart: share the reply link back in the same chat; your friend taps it. This screen switches to the container as soon as the phones connect.</p>
+          <textarea id="myCode" readonly hidden>${link}</textarea>
         </div>
         <button class="btn ghost" id="back2">Start over</button>`;
-      $('#copy').onclick = () => { copyText(code, $('#myCode')); $('#copy').textContent = 'Copied'; };
-      if ($('#shareCode')) $('#shareCode').onclick = () => shareCode(code, 'Pourr reply code. Paste it on the Jug phone:');
+      $('#copy').onclick = () => { copyText(link, $('#myCode')); $('#copy').textContent = 'Copied'; };
+      if ($('#shareCode')) $('#shareCode').onclick = () => shareCode(link, 'Tap this link on the Jug phone to connect Pourr FT:');
       $('#back2').onclick = exitToHome;
     } catch(e){ if ($('#err')) $('#err').textContent = e.message || 'That code did not work. Try again.'; }
   };
   $('#scan').onclick = () => scanButton($('#err'), accept);
   $('#usePaste').onclick = () => accept($('#paste').value);
+  wireImageScan($('#shotOffer'), $('#shot'), $('#err'), accept);
   if (preset) accept(preset);
 }
 
@@ -1040,6 +1186,9 @@ if (!window.RTCPeerConnection) {
 } else if (LINK_OFFER) {
   history.replaceState(null, '', location.pathname + '?m=cont');
   contPair(LINK_OFFER);
+} else if (LINK_REPLY) {
+  history.replaceState(null, '', location.pathname + '?m=reply');
+  deliverReply(LINK_REPLY);
 } else if (MODE === 'jug') jugPair();
 else if (MODE === 'cont') contPair();
 else home();
