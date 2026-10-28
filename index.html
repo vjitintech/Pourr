@@ -678,13 +678,17 @@ async function jugPair(){
     <button class="btn ghost" id="back">Back</button>`;
   $('#back').onclick = exitToHome;
   const shared = () => { try { sessionStorage.setItem('pourr.offerShared', '1'); } catch(e){} };
-  $('#copy').onclick = () => { copyText(link, $('#myCode')); $('#copy').textContent = 'Copied'; shared(); };
+  $('#copy').onclick = () => { copyText(link, $('#myCode')); $('#copy').textContent = 'Copied'; shared(); $('#err').textContent = 'Link copied. Now paste it into WhatsApp (or any chat) and send it to your friend. Keep this page open.'; };
   if ($('#shareLink')) $('#shareLink').onclick = () => { shared(); shareCode(link, 'Open this link to receive files with Pourr FT:'); };
   let timer = null, accepted = false;
   const accept = async (c) => {
     if (accepted) return true;
     try {
-      const d = await unpack(c); if (d.type !== 'answer') throw new Error('That is your own pairing link. Paste the reply your friend sent back.');
+      const d = await unpack(c);
+      if (d.type !== 'answer') {
+        if (ufragOf(d.sdp) === myUfrag) throw new Error("That's your own link, so it goes to your friend, not in here. Paste it into WhatsApp (or any chat) and send it. Your friend opens it and sends back a reply link; tap that.");
+        throw new Error("That link is from another phone that also chose Jug (send). Only one phone sends: the receiving phone should open that link instead of tapping Jug. To send from this phone, ask your friend to open your link.");
+      }
       if (d.forOffer && d.forOffer !== myUfrag) throw new Error('That reply is for an older pairing link. Share the link on this screen again and ask for a new reply.');
       accepted = true;
       await pc.setRemoteDescription({ type: d.type, sdp: d.sdp }); $('#err').textContent = 'Connecting…';
@@ -769,7 +773,7 @@ async function contPair(preset){
   let camAsked = false;
   const accept = async (c) => {
     try {
-      const d = await unpack(c); if (d.type !== 'offer') throw new Error('That is a reply code. Scan the pairing code from the Jug phone.');
+      const d = await unpack(c); if (d.type !== 'offer') throw new Error("That's a reply link, so it goes back to the sending phone (the Jug), not in here. Send it to them in your chat.");
       // Browsers only reveal the phone's real network addresses (including the direct IPv6 route most
       // Indian mobile networks offer) once the camera is allowed. Opened from a link, the camera hasn't been asked yet.
       if (!camStream && preset && !camAsked) {
