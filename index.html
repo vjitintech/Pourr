@@ -184,6 +184,9 @@ body.rot{position:fixed;top:50%;left:50%;width:100vw;height:100vh;overflow:auto;
 body.rot.rot-side{width:100vh;height:100vw}
 body.rot-side main.work{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;gap:12px}
 body.rot-side main.work .dock{max-height:46vw}
+body.rot-side main.pair{display:flex;flex-direction:column;align-items:center}
+body.rot-side main.pair > *{width:100%;max-width:560px}
+body.rot-side .qr{width:min(78vh,300px)}
 input,textarea,.foot a,#mail{-webkit-touch-callout:default;-webkit-user-select:text;user-select:text}
 .foot a{color:var(--water)}
 details.card summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px;color:var(--fg);font-weight:500}
@@ -507,7 +510,7 @@ async function newPeer(){
     if (!paired) { if (st === 'failed' && !trying()) showHotspotHelp(); return; }
     if (st === 'connected') return reconnected();
     if (st === 'disconnected' || st === 'failed') return reconnecting();
-    if (st === 'closed') peerGone();
+    if (st === 'closed' && !openChans().length) peerGone();
   });
 }
 
@@ -573,21 +576,15 @@ function keepTrying(sdp, ms, onTick){
 }
 const mmss = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
-// After pairing: a dropped connection (phone in the background, a network blip) is not the end.
-// Both phones keep knocking until one of them taps Exit; transfers pick up where they stopped.
+// After pairing, the phones stay paired until someone taps Exit. Every connection between them
+// (the main one and the lanes) is watched; a dropped one keeps knocking until it is back, and
+// meanwhile everything carries on over the connections that still work.
 function reconnecting(){
   if (reconn || !pc || goneShown) return;
   const me = pc;
-  setLink(false, 'Reconnecting…');
-  showBanner('reconn', 'Connection interrupted', 'Reconnecting… keep Pourr open on both phones. Transfers continue where they stopped.');
-  reconn = knock(me, remoteSdp, 12 * 3600000, null, () => { reconn = null; if (me === pc) peerGone(); });   // until someone taps Exit
+  reconn = knock(me, remoteSdp, 12 * 3600000, null, null);   // until someone taps Exit
 }
-async function reconnected(){
-  if (!reconn) return;
-  reconn.stop(); reconn = null;
-  hideBanner('reconn');
-  setLink(true, await routeLabel());
-}
+function reconnected(){ if (reconn) { reconn.stop(); reconn = null; } }
 function showBanner(id, title, text){
   if ($('#' + id)) return;
   const html = `<div class="card banner" id="${id}"><h2>${esc(title)}</h2><p>${esc(text)}</p></div>`;
@@ -595,28 +592,59 @@ function showBanner(id, title, text){
   if (dock) dock.insertAdjacentHTML('afterbegin', html); else view.insertAdjacentHTML('afterbegin', html);
 }
 function hideBanner(id){ const b = $('#' + id); if (b) b.remove(); }
+// Open channels to the other phone: the main one first, then the lanes.
+function openChans(){
+  const out = [];
+  if (dc && dc.readyState === 'open') out.push(dc);
+  for (const l of lanes) if (l && l.i > 0 && l.ch && l.ch.readyState === 'open') out.push(l.ch);
+  return out;
+}
+function liveLinks(){
+  let n = 0;
+  if (dc && dc.readyState === 'open' && pc && pc.connectionState === 'connected') n++;
+  for (const l of lanes) if (l && l.i > 0 && laneUp(l) && l.pc.connectionState === 'connected') n++;
+  return n;
+}
+// Small control messages go out on every open connection; the other phone ignores repeats.
+function sendAll(m){ const s = JSON.stringify(m); for (const ch of openChans()) { try { ch.send(s); } catch(e){} } }
+let healthT = null, linkLabel = 'Paired';
+function startHealth(){
+  clearInterval(healthT);
+  const my = session;
+  healthT = setInterval(() => {
+    if (my !== session || !paired || goneShown) return clearInterval(healthT);
+    if (!openChans().length) return peerGone();
+    if (pc && pc.connectionState !== 'connected') reconnecting(); else reconnected();
+    if (liveLinks()) { hideBanner('reconn'); setLink(true, linkLabel); }
+    else {
+      setLink(false, 'Reconnecting…');
+      showBanner('reconn', 'Reconnecting…', 'The connection dropped for a moment. Keep Pourr open on both phones; it reconnects by itself and the transfer continues where it stopped. Only Exit ends the pairing.');
+    }
+  }, 1000);
+}
 
 function wireChannel(ch, onOpen){
   dc = ch; dc.binaryType = 'arraybuffer';
   ch.onopen = async () => {
     stopTrying(); paired = true;
     setLink(true, 'Paired'); stopCamera(); onOpen(); showSafety();
+    startKeepAlive(); lockRotation(); startHealth();
     if (role === 'jug') openLanes();
-    const route = await routeLabel(); setLink(true, route);
+    const route = await routeLabel(); linkLabel = route; setLink(true, route);
     track('paired', { role, route: route.replace('Paired · ', '') });
   };
-  ch.onclose = () => { if (ch === dc) peerGone(); };
+  ch.onclose = () => { if (ch === dc && !openChans().length) peerGone(); };
 }
 function peerGone(){
   if (!role || goneShown || !dc) return;
   goneShown = true;
+  clearInterval(healthT);
   if (reconn) { reconn.stop(); reconn = null; } hideBanner('reconn');
   setLink(false, 'Disconnected');
   pouring = false; pourOn = false;
-  stopKeepAlive(); unlockRotation();
   const keep = role === 'container' && received.length;
-  const html = `<div class="card banner" id="goneCard"><h2>The other phone disconnected</h2>
-    <p>${keep ? 'Your received files are still here. Save them before you leave.' : 'Pair again to keep pouring.'}</p>
+  const html = `<div class="card banner" id="goneCard"><h2>The other phone left</h2>
+    <p>${keep ? 'Your received files are still here. Save them before you leave.' : 'The other phone tapped Exit or closed Pourr. Pair again to keep pouring.'}</p>
     <button class="btn${keep ? ' ghost' : ''}" id="goHome">Back to home</button></div>`;
   const dock = $('#dock');
   if (dock) dock.insertAdjacentHTML('afterbegin', html); else view.insertAdjacentHTML('afterbegin', html);
@@ -626,12 +654,15 @@ function peerGone(){
 /* ---------- lanes: several parallel connections for speed ----------
    One browser connection keeps only about 100 KB in flight, so over the internet its speed
    falls with distance (about 2 MB/s at a 50 ms round trip). Pourr opens extra connections
-   ("lanes") between the same two phones and pours slices of each file through all of them.
-   Lanes are set up over the first, already verified connection, so the safety code covers them. */
+   ("lanes") between the same two phones and pours slices of each file through them in parallel;
+   the receiving phone downloads over all of them at once. The main connection stays free for
+   control messages. Lanes are set up over the main, already verified connection, so the safety
+   code covers them. Pourr adds lanes only while they make the pour faster, so a slow uplink is
+   not flooded. */
 const LANES = 8;
 let lanes = [];          // lanes[0] is the main connection
-function mainLane(){ if (!lanes[0] || lanes[0].ch !== dc) lanes[0] = { i: 0, pc, ch: dc, inflight: new Map(), cur: null }; return lanes[0]; }
-function laneUp(l){ return l && !l.dead && l.ch && l.ch.readyState === 'open' && (l.i === 0 || l.pc.connectionState !== 'failed'); }
+function mainLane(){ if (!lanes[0] || lanes[0].ch !== dc) lanes[0] = { i: 0, pc, ch: dc, inflight: new Map(), cur: null, lastBuf: 0, lastProg: 0 }; return lanes[0]; }
+function laneUp(l){ return !!l && !l.dead && !!l.ch && l.ch.readyState === 'open' && (l.i === 0 || l.pc.connectionState !== 'failed'); }
 function makeLane(i){
   const my = session;
   return iceServers().then(servers => {
@@ -639,18 +670,15 @@ function makeLane(i){
     const p = new RTCPeerConnection({ iceServers: servers });
     const ch = p.createDataChannel('lane', { negotiated: true, id: 0, ordered: true });
     ch.binaryType = 'arraybuffer';
-    const l = { i, pc: p, ch, inflight: new Map(), cur: null, dead: false, since: 0, knock: null, sdp: '' };
+    const l = { i, pc: p, ch, inflight: new Map(), cur: null, dead: false, knock: null, sdp: '', lastBuf: 0, lastProg: 0, stalled: false };
     lanes[i] = l;
-    ch.onopen = () => { if (my === session && sending) startWorker(l); };
-    ch.onclose = () => { l.dead = true; requeueLane(l); };
+    ch.onopen = () => { if (my === session && jobs) jobs.kick(); };
+    ch.onclose = () => { l.dead = true; requeueLane(l); if (my === session && paired && !openChans().length) peerGone(); };
     ch.onmessage = e => laneRx(l, e);
     p.addEventListener('connectionstatechange', () => {
       const st = p.connectionState;
-      if (st === 'connected') { l.since = 0; if (l.knock) { l.knock.stop(); l.knock = null; } }
-      else if ((st === 'disconnected' || st === 'failed') && l.sdp) {
-        l.since = l.since || Date.now();
-        if (!l.knock) l.knock = knock(p, l.sdp, 10 * 60000, null, null);
-      }
+      if (st === 'connected') { if (l.knock) { l.knock.stop(); l.knock = null; } }
+      else if ((st === 'disconnected' || st === 'failed') && l.sdp && !l.knock) l.knock = knock(p, l.sdp, 12 * 3600000, null, null);
     });
     return l;
   });
@@ -669,7 +697,8 @@ async function openLanes(){
 }
 async function onLaneOffer(m){
   const my = session;
-  if (lanes[m.i]) try { lanes[m.i].pc.close(); } catch(e){}
+  if (lanes[m.i] && lanes[m.i].sdp === m.sdp) return;          // the same offer again
+  if (lanes[m.i]) try { lanes[m.i].dead = true; lanes[m.i].pc.close(); } catch(e){}
   const l = await makeLane(m.i); if (!l || my !== session) return;
   l.sdp = m.sdp;
   await l.pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
@@ -677,13 +706,13 @@ async function onLaneOffer(m){
   await waitIce(l.pc);
   if (my !== session || !dc || dc.readyState !== 'open') return;
   dc.send(JSON.stringify({ t: 'lane-ans', i: m.i, sdp: l.pc.localDescription.sdp }));
-  l.knock = knock(l.pc, m.sdp, 2 * 60000, null, null);
+  l.knock = knock(l.pc, m.sdp, 12 * 3600000, null, null);
 }
 async function onLaneAnswer(m){
-  const l = lanes[m.i]; if (!l) return;
+  const l = lanes[m.i]; if (!l || l.sdp) return;
   l.sdp = m.sdp;
   try { await l.pc.setRemoteDescription({ type: 'answer', sdp: m.sdp }); } catch(e){ return; }
-  l.knock = knock(l.pc, m.sdp, 2 * 60000, null, null);
+  l.knock = knock(l.pc, m.sdp, 12 * 3600000, null, null);
 }
 function closeLanes(){
   for (const l of lanes) if (l && l.i > 0) { l.dead = true; if (l.knock) l.knock.stop(); try { l.ch.onclose = null; l.ch.close(); l.pc.close(); } catch(e){} }
@@ -728,10 +757,10 @@ document.addEventListener('visibilitychange', () => {
   if (paired && pc && pc.connectionState !== 'connected') reconnecting();
 });
 
-/* ---------- screen rotation stays put during a pour ----------
-   While files are pouring, the page keeps the orientation it had when the pour started:
-   if the phone rotates, the page turns back the other way, so nothing flips mid-transfer.
-   Afterwards the phone's own rotation setting applies again. */
+/* ---------- screen rotation stays put on the transfer screens ----------
+   From choosing Jug or Container until Exit, the page keeps the orientation it had: if the
+   phone rotates (for example while tilting to pour), the page turns back the other way, so
+   nothing flips. On the home screen the phone's own rotation setting applies again. */
 let rotLock = null;
 function screenAngle(){ const a = screen.orientation ? screen.orientation.angle : (window.orientation || 0); return ((a % 360) + 360) % 360; }
 function lockRotation(){
@@ -801,7 +830,7 @@ $('#exit').onclick = () => {
   exitToHome();
 };
 function exitToHome(){
-  try { if (dc && dc.readyState === 'open') dc.send(JSON.stringify({ t: 'bye' })); } catch(e){}
+  sendAll({ t: 'bye' });
   resetAll(); goHome();
 }
 function resetAll(){
@@ -814,7 +843,7 @@ function resetAll(){
   window.removeEventListener('deviceorientation', onOrient);
   role = null; goneShown = false; hotspotShown = false;
   jugFiles = []; pouring = false; pourOn = false; sending = false; holdPour = false; tilt = 0; tiltOK = false;
-  paired = false; jobs = null; rxFiles = new Map(); early.clear(); closeLanes();
+  paired = false; jobs = null; rxFiles = new Map(); early.clear(); doneIds.clear(); doneBatches.clear(); closeLanes(); clearInterval(healthT);
   if (reconn) { reconn.stop(); reconn = null; }
   stopKeepAlive(); unlockRotation();
   resumeWaiters.splice(0).forEach(r => r());
@@ -876,7 +905,7 @@ function home(){
 
 /* ---------- JUG: pairing ---------- */
 async function jugPair(){
-  role = 'jug'; $('#exit').hidden = false;
+  role = 'jug'; $('#exit').hidden = false; lockRotation();
   view.className = 'pair';
   view.innerHTML = `<div class="card"><h2>Preparing a pairing code…</h2><p>This takes a few seconds while Pourr finds the best route between the phones.</p></div>`;
   const my = session;
@@ -991,7 +1020,7 @@ function deliverReply(code){
 
 /* ---------- CONTAINER: pairing ---------- */
 async function contPair(preset){
-  role = 'container'; $('#exit').hidden = false;
+  role = 'container'; $('#exit').hidden = false; lockRotation();
   view.className = 'pair';
   view.innerHTML = `
     <div class="card">
@@ -1106,7 +1135,6 @@ function jugStage(){
         <button class="btn clay" id="tiltBtn">Enable tilt to pour</button>
       </div>
       <button class="btn ghost" id="hold" disabled>Tap to pour (no tilt sensor)</button>
-      <button class="btn ghost" id="pause" hidden>Pause pouring</button>
     </div>`;
   dc.onmessage = e => laneRx(mainLane(), e);
   $('#add').onclick = () => $('#pick').click();
@@ -1119,7 +1147,6 @@ function jugStage(){
     setTimeout(() => { if (!tiltOK && $('#hold')) $('#hold').disabled = false; }, 1500);
   };
   $('#hold').onclick = () => startPour();
-  $('#pause').onclick = () => { if (pourOn) { pourOn = false; $('#pause').textContent = 'Resume pouring'; setStatus('Paused. Tap Resume or tilt again to continue.'); } else startPour(); };
   if (!('DeviceOrientationEvent' in window)) $('#hold').disabled = false;
   renderJug();
   const my = session; requestAnimationFrame(() => jugLoop(my));
@@ -1144,7 +1171,6 @@ function renderJug(){
 function startPour(){
   if (!jugFiles.length || !dc || dc.readyState !== 'open') return;
   pourOn = true;
-  const p = $('#pause'); if (p) { p.hidden = false; p.textContent = 'Pause pouring'; }
   resumeWaiters.splice(0).forEach(r => r());
   if (!sending) pourQueue();
 }
@@ -1189,105 +1215,152 @@ function reportBatch(){
   remember({ title: b.bad ? 'Pour finished with errors' : 'Pour complete', text: `${b.ok} of ${b.total} file${b.total > 1 ? 's' : ''} delivered and verified · ${fmt(b.bytes)} in ${dur(secs)}` });
 }
 
-/* The pour: files go out first in, first out. Each file is cut into 4 MB slices; every slice is
-   fingerprinted (SHA-256) and sent whole through whichever lane is free. The Container confirms
-   each slice; a slice caught on a lane that drops is sent again on another lane. */
-const SLICE = 4 * 1048576;
-let jobs = null;           // { requeue:[], file:it|null, next:0, idx:0 }
+/* The pour: files go out first in, first out. Each file is cut into 1 MB slices; every slice is
+   fingerprinted (SHA-256) and sent whole through whichever lane is free, with the file's details
+   in its header, so no single connection can hold a file up. The Container confirms each slice
+   on every connection. A slice on a lane that stalls is sent again on another lane, and the last
+   slices of a pour are doubled up on idle lanes, so a pour never hangs on one slow connection. */
+const SLICE = 1048576;
+let jobs = null;
 async function readSlice(f, off){
   const buf = await f.slice(off, off + SLICE).arrayBuffer();
   return { buf, h: hex(await crypto.subtle.digest('SHA-256', buf)) };
 }
+function fileMeta(it){ const f = it.file; return { b: pourBatch.id, id: it.id, name: f.name, size: f.size, type: f.type, idx: it.idx, of: it.of, slices: it.slices }; }
+function moreToStart(){ const q = jobs; return !!q && ((q.file && q.next < q.file.slices) || jugFiles.some(x => !x.started)); }
 function nextJob(){
   const q = jobs; if (!q) return null;
-  if (q.requeue.length) return q.requeue.shift();
+  while (q.requeue.length) { const j = q.requeue.shift(); j.queued = false; if (!j.acked) return j; }
   while (true) {
     const it = q.file;
-    if (it && q.next < it.slices) { const i = q.next++; return { it, i, off: i * SLICE, len: Math.min(SLICE, it.file.size - i * SLICE) }; }
-    const nx = jugFiles.find(x => !x.started); if (!nx) return null;
+    if (it && q.next < it.slices) {
+      const i = q.next++;
+      const j = { it, i, key: it.id + ':' + i, off: i * SLICE, len: Math.min(SLICE, it.file.size - i * SLICE), acked: false, sends: 0, t: 0, queued: false };
+      q.unacked.set(j.key, j);
+      return j;
+    }
+    const nx = jugFiles.find(x => !x.started); if (!nx) break;
     startFile(nx);
   }
+  // Nothing new left: help with the slice that has been out longest, if it's overdue.
+  return overdue();
 }
+function overdue(){
+  const q = jobs; if (!q) return null;
+  let best = null;
+  for (const j of q.unacked.values()) if (!j.acked && j.sends < 3 && (!best || j.t < best.t)) best = j;
+  return best && Date.now() - best.t > Math.max(4000, q.sliceMs * 2.5) ? best : null;
+}
+function hasWork(){ return !!jobs && (jobs.requeue.length > 0 || moreToStart() || !!overdue()); }
 function startFile(it){
   const q = jobs, b = pourBatch;
-  it.started = true; it.slices = Math.ceil(it.file.size / SLICE); it.acked = 0;
+  it.started = true; it.slices = Math.ceil(it.file.size / SLICE);
   q.file = it; q.next = 0; q.idx++;
-  it.idx = q.idx; it.of = q.idx - 1 + jugFiles.filter(x => !x.started).length + 1;
+  it.idx = q.idx; it.of = q.idx + jugFiles.filter(x => !x.started).length;
   b.ids.add(it.id); b.items.set(it.id, it); b.total = q.idx;
   const cnt = it.el.querySelector('.cnt'); cnt.hidden = false; cnt.textContent = `${it.idx} of ${it.of}`;
   setStatus(`Pouring ${it.idx} of ${it.of} · ${it.file.name}`);
-  const f = it.file;
-  dc.send(JSON.stringify({ t: 'meta', id: it.id, name: f.name, size: f.size, type: f.type, idx: it.idx, of: it.of, slices: it.slices, slice: SLICE }));
+  sendAll({ t: 'meta', ...fileMeta(it) });
 }
 function requeueLane(l){
-  if (!jobs || !l.inflight.size) return;
-  for (const j of l.inflight.values()) { j.it.sent -= j.sentBytes || 0; jobs.bytes -= j.sentBytes || 0; jobs.requeue.push(j); }
+  if (!jobs || !l || !l.inflight.size) return;
+  for (const j of l.inflight.values()) if (!j.acked && !j.queued) { j.queued = true; jobs.requeue.push(j); }
   l.inflight.clear();
-  for (const x of lanes) if (laneUp(x) && !x.working) startWorker(x);
+  jobs.kick();
 }
 function onSliceAck(m){
-  for (const l of lanes) if (l) { const j = l.inflight.get(m.f + ':' + m.i); if (j) { l.inflight.delete(m.f + ':' + m.i); j.it.acked++; } }
+  const q = jobs; if (!q) return;
+  const key = m.f + ':' + m.i, j = q.unacked.get(key);
+  for (const l of lanes) if (l && l.inflight.delete(key)) { l.lastProg = Date.now(); if (l.stalled && !l.inflight.size) l.stalled = false; }
+  if (!j || j.acked) return;
+  j.acked = true; q.unacked.delete(key); q.acked += j.len;
+  const ms = Date.now() - j.t; q.sliceMs = q.sliceMs ? q.sliceMs * 0.8 + ms * 0.2 : ms;
+  q.kick();
+}
+// Which lanes carry data right now: the first `active` working lanes; the main connection only
+// when no lane is up.
+function dataLanes(){
+  const up = lanes.filter(l => l && l.i > 0 && laneUp(l) && !l.stalled && l.pc.connectionState === 'connected');
+  if (!up.length) { const m = lanes[0]; return laneUp(m) ? [m] : []; }
+  return up.slice(0, jobs ? jobs.active : 2);
 }
 async function worker(l){
-  const my = session, ch = l.ch, CH = chunkSize(l.pc), HIGH = 4 * 1048576;
-  ch.bufferedAmountLowThreshold = 1048576;
-  const live = () => my === session && laneUp(l) && !!jobs;
-  while (live()) {
-    await waitPour(); if (!live()) return;
-    // A lane stuck in a dropped connection hands its slices to the others after 8 s.
-    if (l.i > 0 && l.since && Date.now() - l.since > 8000) { requeueLane(l); await new Promise(r => setTimeout(r, 2000)); continue; }
+  const my = session, ch = l.ch, CH = chunkSize(l.pc), HIGH = 2 * 1048576;
+  ch.bufferedAmountLowThreshold = 512 * 1024;
+  const live = () => my === session && !!jobs && laneUp(l) && !l.stalled;
+  while (live() && dataLanes().includes(l)) {
     const j = nextJob(); if (!j) return;
-    const { buf, h } = await readSlice(j.it.file, j.off);
-    if (!live()) { jobs && jobs.requeue.push(j); return; }
-    j.sentBytes = 0;
-    l.inflight.set(j.it.id + ':' + j.i, j);
-    ch.send(JSON.stringify({ t: 's', f: j.it.id, i: j.i, n: buf.byteLength, h }));
+    j.sends++; j.t = j.t || Date.now();
+    let buf, h;
+    try { ({ buf, h } = await readSlice(j.it.file, j.off)); } catch(e){ if (!j.queued && jobs) { j.queued = true; jobs.requeue.push(j); } return; }
+    if (!live() || j.acked) { if (!j.acked && !j.queued && jobs) { j.queued = true; jobs.requeue.push(j); } if (!live()) return; continue; }
+    l.inflight.set(j.key, j); l.lastProg = l.lastProg || Date.now();
+    ch.send(JSON.stringify({ t: 's', f: j.it.id, i: j.i, n: buf.byteLength, h, meta: fileMeta(j.it) }));
+    const first = j.sends === 1;
     for (let p = 0; p < buf.byteLength; p += CH) {
-      if (!pourOn) await waitPour();
       if (ch.bufferedAmount > HIGH) await waitDrain(ch);
-      if (!live()) return;
+      if (my !== session || !jobs || ch.readyState !== 'open') return;
       ch.send(buf.slice(p, p + CH));
-      const n = Math.min(CH, buf.byteLength - p); j.sentBytes += n; j.it.sent += n; jobs.bytes += n;
+      if (first) { const n = Math.min(CH, buf.byteLength - p); j.it.sent += n; jobs.bytes += n; }
     }
   }
 }
 function startWorker(l){
   if (!jobs || l.working || !laneUp(l)) return;
   l.working = true;
-  worker(l).catch(() => {}).finally(() => { l.working = false; if (jobs) jobs.check(); });
+  worker(l).catch(() => {}).finally(() => { l.working = false; if (jobs && hasWork()) setTimeout(() => jobs && jobs.kick(), 20); });
 }
 async function pourQueue(){
   if (sending) return;
   const my = session;
-  sending = true; startKeepAlive(); lockRotation();
+  sending = true;
   mainLane();
-  pourBatch = { ids: new Set(), items: new Map(), total: 0, ok: 0, bad: 0, bytes: 0, t0: performance.now(), t1: 0, done: false };
-  jobs = { requeue: [], file: null, next: 0, idx: 0, bytes: 0, check: () => {} };
-  const m = meter();
+  pourBatch = { id: Math.random().toString(36).slice(2), ids: new Set(), items: new Map(), total: 0, ok: 0, bad: 0, bytes: 0, t0: performance.now(), t1: 0, done: false };
+  let finish;
+  const allDone = new Promise(r => finish = r);
+  jobs = { requeue: [], file: null, next: 0, idx: 0, bytes: 0, acked: 0, sliceMs: 0, unacked: new Map(), active: 4,
+    kick(){
+      if (!jobs) return;
+      if (!moreToStart() && !jobs.requeue.length && !jobs.unacked.size) return finish();
+      if (!hasWork()) return;
+      for (const l of dataLanes()) if (!l.working) startWorker(l);
+    } };
+  const m = meter(), ackM = meter();
+  let lastGrow = Date.now(), growRate = 0;
   const tick = setInterval(() => {
     if (my !== session || !jobs) return;
-    m.add(jobs.bytes); const r = m.rate(), el = $('#speed');
-    if (el) el.textContent = r > 0 ? mbps(r) : (pourOn ? '' : 'paused');
+    const now = Date.now();
+    m.add(jobs.bytes); ackM.add(jobs.acked);
+    const r = m.rate(), el = $('#speed'), n = dataLanes().length;
+    if (el) el.textContent = r > 0 ? `${mbps(r)} · ${n} lane${n > 1 ? 's' : ''}` : (liveLinks() ? '' : 'reconnecting…');
     for (const it of jugFiles) if (it.el && it.started && it.file.size) it.el.querySelector('.bar b').style.width = Math.min(100, it.sent / it.file.size * 100) + '%';
     renderJug();
-    for (const l of lanes) if (l && l.i > 0 && l.since && Date.now() - l.since > 8000 && l.inflight.size) requeueLane(l);
-    for (const l of lanes) if (laneUp(l) && !l.working && (jobs.requeue.length || jugFiles.some(x => !x.started) || (jobs.file && jobs.next < jobs.file.slices))) startWorker(l);
-  }, 250);
+    // A lane that has made no progress for 10 s hands its slices to the others.
+    for (const l of lanes) {
+      if (!l || !l.ch) continue;
+      const b = l.ch.readyState === 'open' ? l.ch.bufferedAmount : 0;
+      if (b < l.lastBuf) l.lastProg = now;
+      l.lastBuf = b;
+      if (l.inflight.size && now - l.lastProg > 10000) { l.stalled = l.i > 0; requeueLane(l); l.lastProg = now; }
+      if (l.stalled && b === 0 && l.pc.connectionState === 'connected') l.stalled = false;
+    }
+    // Add a lane every 2 s while that keeps making the pour faster; drop one if it got much slower.
+    if (now - lastGrow > 2000) {
+      const ar = ackM.rate(); lastGrow = now;
+      if (ar > growRate * 1.08 && jobs.active < LANES - 1) { jobs.active++; growRate = ar; }
+      else if (ar < growRate * 0.5 && jobs.active > 2) { jobs.active--; growRate = ar; }
+    }
+    jobs.kick();
+  }, 500);
   try {
-    dc.send(JSON.stringify({ t: 'batch' }));
-    await new Promise(res => {
-      jobs.check = () => {
-        const more = jobs.requeue.length || jugFiles.some(x => !x.started) || (jobs.file && jobs.next < jobs.file.slices);
-        const flying = lanes.some(l => l && l.inflight.size);
-        if (!more && !flying && !lanes.some(l => l && l.working)) res();
-        else for (const l of lanes) if (laneUp(l) && !l.working && more) startWorker(l);
-      };
-      for (const l of lanes) startWorker(l);
-      const watch = setInterval(() => { if (my !== session || !jobs) { clearInterval(watch); return res(); } jobs.check(); if (!lanes.some(l => l && l.inflight.size) && !lanes.some(l => l && l.working) && !jobs.requeue.length && !jugFiles.some(x => !x.started) && !(jobs.file && jobs.next < jobs.file.slices)) { clearInterval(watch); res(); } }, 500);
-    });
+    sendAll({ t: 'batch', b: pourBatch.id });
+    jobs.kick();
+    await allDone;
     if (my !== session) return;
-    dc.send(JSON.stringify({ t: 'done', count: pourBatch.total }));
-    pourBatch.bytes = jobs.bytes; pourBatch.t1 = performance.now(); pourBatch.done = true;
+    pourBatch.bytes = [...pourBatch.items.values()].reduce((a, it) => a + it.file.size, 0); pourBatch.t1 = performance.now(); pourBatch.done = true;
+    const doneMsg = { t: 'done', b: pourBatch.id, count: pourBatch.total };
+    sendAll(doneMsg);
+    pourBatch.resend = setInterval(() => { if (my !== session || !pourBatch || !pourBatch.ids.size) return clearInterval(pourBatch && pourBatch.resend); sendAll(doneMsg); }, 3000);
     if (pourBatch.ids.size) setStatus(`Poured ${pourBatch.total} of ${pourBatch.total} · waiting for the other phone to confirm…`, true);
     else finishPour();
     if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
@@ -1298,12 +1371,11 @@ async function pourQueue(){
   }
 }
 // Files added while a pour is running start right after the current ones.
-function pourFiles(){ if (jobs) jobs.check(); }
+function pourFiles(){ if (jobs) jobs.kick(); }
 function finishPour(){
+  if (pourBatch && pourBatch.resend) clearInterval(pourBatch.resend);
   reportBatch();
   pourOn = false;
-  const p = $('#pause'); if (p) p.hidden = true;
-  stopKeepAlive(); unlockRotation();
   if (jugFiles.length && !sending) setStatus(`${jugFiles.length} file${jugFiles.length>1?'s':''} in the jug · tilt to pour`);
 }
 
@@ -1311,7 +1383,12 @@ function finishPour(){
 function laneRx(l, e){
   if (typeof e.data === 'string') {
     let m; try { m = JSON.parse(e.data); } catch(_){ return; }
-    if (m.t === 's') { l.cur = { f: m.f, i: m.i, n: m.n, h: m.h, parts: [], got: 0 }; if (!m.n) sliceDone(l); return; }
+    if (m.t === 's') {
+      if (role === 'container' && m.meta) onControl({ t: 'meta', ...m.meta });
+      l.cur = { f: m.f, i: m.i, n: m.n, h: m.h, parts: [], got: 0 };          // a new header drops any half-received slice
+      if (!m.n) sliceDone(l);
+      return;
+    }
     if (m.t === 'bye') return peerGone();
     if (m.t === 'lane') return onLaneOffer(m);
     if (m.t === 'lane-ans') return onLaneAnswer(m);
@@ -1347,41 +1424,51 @@ function contStage(){
     <div class="dock" id="dock"><div class="safety" id="safety" hidden></div><div class="status" id="status"></div><div id="saveArea"></div></div>`;
   dc.onmessage = e => laneRx(mainLane(), e);
 }
-function startRxBatch(){
+function startRxBatch(b){
   clearInterval(rxTick);
-  rx = { idx: 0, of: 0, start: received.length, bytes: 0 };
+  rx = { b, idx: 0, of: 0, start: received.length, bytes: 0 };
   const m = meter(), my = session;
   rxTick = setInterval(() => {
     if (my !== session || !rx) return clearInterval(rxTick);
-    m.add(rx.bytes); const r = m.rate(), el = $('#speed'); if (el) el.textContent = r > 0 ? mbps(r) : '';
+    m.add(rx.bytes); const r = m.rate(), el = $('#speed'), n = liveLinks();
+    if (el) el.textContent = r > 0 ? `${mbps(r)} · ${n} connection${n > 1 ? 's' : ''}` : '';
   }, 250);
   $('#empty').hidden = true;
   $('#saveArea').innerHTML = '';
-  startKeepAlive(); lockRotation();
 }
 let finalizing = Promise.resolve(), damaged = 0;
+const doneIds = new Set(), doneBatches = new Set();
 function onControl(m){
-  if (m.t === 'batch') { startRxBatch(); damaged = 0; }
+  if (m.t === 'batch') { if (!rx || rx.b !== m.b) { startRxBatch(m.b); damaged = 0; } }
   else if (m.t === 'meta') {
-    if (!rx) startRxBatch();
+    if (rxFiles.has(m.id) || doneIds.has(m.id)) return;               // already known (it comes on every connection)
+    if (!rx || rx.b !== m.b) { startRxBatch(m.b); damaged = 0; }
     const el = document.createElement('div'); el.className = 'tile arriving'; el.innerHTML = tileHTML(m.name, m.size);
     const cnt = el.querySelector('.cnt'); cnt.hidden = false; cnt.textContent = `${m.idx} of ${m.of}`;
+    el.style.order = String(m.idx);
     $('#inside').appendChild(el);                    // column-reverse: first file settles at the bottom
     let finish; const whenDone = new Promise(r => finish = r);
-    const c = { ...m, slices: new Array(m.slices), have: 0, got: 0, ok: true, el, finish };
+    const c = { ...m, slices: new Array(m.slices), have: 0, got: 0, ok: true, el, finish, checking: new Set(), bad: {} };
     rxFiles.set(m.id, c);
-    if (!current) current = c;
+    if (!current || m.idx < current.idx) current = c;
     const waiting = early.get(m.id); early.delete(m.id);
-    if (waiting) for (const s of waiting) { c.got += s.got; if (rx) rx.bytes += s.got; storeSlice(s); }
-    rx.of = m.of; rx.t0 = rx.t0 || performance.now();
+    if (waiting) for (const s of waiting) storeSlice(s);
+    rx.of = Math.max(rx.of, m.of); rx.t0 = rx.t0 || performance.now(); rx.size = (rx.size || 0) + m.size;
     if (!m.slices) finish();
-    finalizing = finalizing.then(() => whenDone).then(() => finishFile(c));
+    whenDone.then(() => finishFile(c));
+    rx.files = rx.files || []; rx.files.push(whenDone);
     scheduleUI();
   }
-  else if (m.t === 'done') { const n = m.count; finalizing = finalizing.then(() => finishRx(n)); }
+  else if (m.t === 'done') {
+    if (doneBatches.has(m.b)) return;
+    doneBatches.add(m.b);
+    const files = (rx && rx.files) || [];
+    Promise.all(files).then(() => finishRx(m.count));
+  }
 }
-// A whole slice has arrived on a lane: keep it on disk-backed storage (not in memory),
-// check its fingerprint and confirm it to the Jug.
+// A whole slice has arrived on a lane: check its fingerprint, keep it on disk-backed storage
+// (not in memory) and confirm it on every connection. A slice that fails the check is dropped
+// and the Jug sends it again; after three bad copies the file is reported as damaged.
 const early = new Map();   // slices that beat their file's details here (lanes are separate connections)
 function sliceDone(l){
   const s = l.cur; l.cur = null;
@@ -1389,28 +1476,39 @@ function sliceDone(l){
 }
 function storeSlice(s){
   const c = rxFiles.get(s.f);
-  if (!c) { if (!early.has(s.f)) early.set(s.f, []); early.get(s.f).push(s); return; }
-  if (c.slices[s.i]) { sendCtl({ t: 'sa', f: s.f, i: s.i }); return; }      // a repeat of a slice we already have
+  if (!c) {
+    if (doneIds.has(s.f)) return sendAll({ t: 'sa', f: s.f, i: s.i });
+    if (!early.has(s.f)) early.set(s.f, []); early.get(s.f).push(s); return;
+  }
+  if (c.slices[s.i]) return sendAll({ t: 'sa', f: s.f, i: s.i });     // a repeat of a slice we already have
+  if (c.checking.has(s.i)) return;
+  c.checking.add(s.i);
   const blob = new Blob(s.parts);
-  c.slices[s.i] = blob;
-  sendCtl({ t: 'sa', f: s.f, i: s.i });
   blob.arrayBuffer().then(b => crypto.subtle.digest('SHA-256', b)).then(d => {
-    if (hex(d) !== s.h) c.ok = false;
+    c.checking.delete(s.i);
+    if (!c.slices || c.slices[s.i]) return;
+    const good = hex(d) === s.h && blob.size === s.n;
+    if (!good) { c.bad[s.i] = (c.bad[s.i] || 0) + 1; if (c.bad[s.i] < 3) return; c.ok = false; }
+    c.slices[s.i] = blob;
+    c.got = Math.min(c.size, c.got);
+    sendAll({ t: 'sa', f: s.f, i: s.i });
     if (++c.have === c.slices.length) c.finish();
+    scheduleUI();
   });
 }
-function sendCtl(m){ try { if (dc && dc.readyState === 'open') dc.send(JSON.stringify(m)); } catch(e){} }
+function sendCtl(m){ sendAll(m); }
 function finishFile(c){
   const okSize = c.slices.reduce((a, b) => a + (b ? b.size : 0), 0) === c.size;
   const ok = c.ok && okSize;
   const file = ok ? new File(c.slices, c.name, { type: c.type || 'application/octet-stream' }) : null;
-  c.slices = null; rxFiles.delete(c.id);
-  if (current === c) current = [...rxFiles.values()][0] || null;
+  if (file) file._idx = c.idx;
+  c.slices = null; rxFiles.delete(c.id); doneIds.add(c.id);
+  if (current === c) current = [...rxFiles.values()].sort((a, b) => a.idx - b.idx)[0] || null;
   c.el.classList.add(ok ? 'done' : 'bad');
   c.el.querySelector('.bar b').style.width = '100%';
   c.el.querySelector('.cnt').textContent = ok ? `✓ ${c.idx} of ${c.of}` : `✗ damaged`;
   if (ok) received.push(file); else damaged++;
-  sendCtl({ t: 'ack', id: c.id, ok });
+  sendAll({ t: 'ack', id: c.id, ok });
   if (navigator.vibrate) navigator.vibrate(10);
   scheduleUI();
 }
@@ -1418,16 +1516,17 @@ function finishFile(c){
 function scheduleUI(){ if (uiPending) return; uiPending = true; requestAnimationFrame(() => { uiPending = false; drawRx(); }); }
 function drawRx(){
   if (role !== 'container' || !rx || !$('#fill')) return;
-  const doneN = received.length - rx.start, frac = current && current.size ? current.got / current.size : 0;
+  const doneN = received.length - rx.start, frac = current && current.size ? Math.min(1, current.got / current.size) : 0;
   $('#fill').style.height = Math.min(92, ((doneN + frac) / (rx.of || 1)) * 92) + '%';
   if (current) {
     current.el.querySelector('.bar b').style.width = (frac * 100) + '%';
-    setStatus(`Receiving ${current.idx} of ${current.of} · ${fmt(current.got)} of ${fmt(current.size)}`);
+    setStatus(`Receiving ${current.idx} of ${current.of} · ${fmt(Math.min(current.got, current.size))} of ${fmt(current.size)}`);
   }
   $('#gauge').textContent = received.length ? `${received.length} file${received.length>1?'s':''} ready to save` : '';
 }
 function finishRx(count){
-  const secs = rx && rx.t0 ? (performance.now() - rx.t0) / 1000 : 0, bytes = rx ? rx.bytes : 0;
+  if (rx) { const head = received.slice(0, rx.start), batch = received.slice(rx.start).sort((a, b) => (a._idx || 0) - (b._idx || 0)); received = head.concat(batch); }
+  const secs = rx && rx.t0 ? (performance.now() - rx.t0) / 1000 : 0, bytes = rx ? (rx.size || rx.bytes) : 0;
   clearInterval(rxTick); rx = null;
   const sp = $('#speed'); if (sp) sp.textContent = '';
   $('#fill').style.height = '92%';
@@ -1436,7 +1535,6 @@ function finishRx(count){
   track('receive_complete', { files: count, mb: Math.round(bytes / 1048576), seconds: Math.round(secs), damaged });
   remember({ title: damaged ? 'Received with errors' : 'Files received', text: `${count - damaged} of ${count} file${count > 1 ? 's' : ''} received and verified · ${fmt(bytes)} in ${dur(secs)}` });
   $('#gauge').textContent = `${received.length} file${received.length>1?'s':''} ready to save`;
-  stopKeepAlive(); unlockRotation();
   showSaveCard();
 }
 function showSaveCard(){
