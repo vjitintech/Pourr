@@ -41,7 +41,7 @@ Encrypted phone-to-phone transfer, a SHA-256 check on every file, a matching 4-d
 
 pourrft@gmail.com
 
-© 2026 Pourr. All rights reserved.
+© 2026 Pourr Power FT. All rights reserved.
 
 ## Test on one computer
 
