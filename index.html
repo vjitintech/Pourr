@@ -662,9 +662,9 @@ async function jugPair(){
     <div class="card">
       <h2>Step 1 · Container scans this</h2>
       <div class="qr"><img alt="Pairing code" src="${await qrImg(code)}"></div>
-      <div class="row">${navigator.share ? '<button class="btn ghost" id="shareLink">Share link</button>' : ''}<button class="btn ghost" id="copy">Copy link</button></div>
-      <p class="note">Far apart? Share the link in any chat app. Keep this page open until the phones pair.</p>
-      <textarea id="myCode" readonly hidden>${link}</textarea>
+      <div class="row">${navigator.share ? '<button class="btn ghost" id="shareLink">Share link</button>' : ''}<button class="btn ghost" id="copy">Copy code</button></div>
+      <p class="note">Far apart? Share the link in any chat app, or copy the code and paste it into a chat. Keep this page open until the phones pair.</p>
+      <textarea id="myCode" readonly hidden>${code}</textarea>
     </div>
     <div class="card">
       <h2>Step 2 · Get the Container's reply</h2>
@@ -678,7 +678,7 @@ async function jugPair(){
     <button class="btn ghost" id="back">Back</button>`;
   $('#back').onclick = exitToHome;
   const shared = () => { try { sessionStorage.setItem('pourr.offerShared', '1'); } catch(e){} };
-  $('#copy').onclick = () => { copyText(link, $('#myCode')); $('#copy').textContent = 'Copied'; shared(); $('#err').textContent = 'Link copied. Now paste it into WhatsApp (or any chat) and send it to your friend. Keep this page open.'; };
+  $('#copy').onclick = () => { copyText(code, $('#myCode')); $('#copy').textContent = 'Copied'; shared(); $('#err').textContent = 'Code copied. Paste it into WhatsApp (or any chat) and send it to your friend; they paste it in Container. Keep this page open.'; };
   if ($('#shareLink')) $('#shareLink').onclick = () => { shared(); shareCode(link, 'Open this link to receive files with Pourr FT:'); };
   let timer = null, accepted = false;
   const accept = async (c) => {
@@ -739,17 +739,16 @@ function deliverReply(code){
   try { localStorage.setItem('pourr.msg', JSON.stringify(msg)); localStorage.removeItem('pourr.msg'); } catch(e){}
   setTimeout(() => {
     if (got) return;
-    const link = location.origin + location.pathname + '#a=' + code;
     view.innerHTML = `
       <div class="card">
         <h2>Couldn't find your Jug page</h2>
         <p>Open Pourr in the browser where you made the pairing link, tap <b>Paste reply</b>, and paste this reply.</p>
         <p class="note">If that page was closed, start again: tap Jug, then share the new link.</p>
-        <button class="btn clay" id="copyReply">Copy reply</button>
-        <textarea id="myCode" readonly hidden>${link}</textarea>
+        <button class="btn clay" id="copyReply">Copy code</button>
+        <textarea id="myCode" readonly hidden>${code}</textarea>
       </div>
       <button class="btn ghost" id="back">Back to home</button>`;
-    $('#copyReply').onclick = () => { copyText(link, $('#myCode')); $('#copyReply').textContent = 'Copied'; };
+    $('#copyReply').onclick = () => { copyText(code, $('#myCode')); $('#copyReply').textContent = 'Copied'; };
     $('#back').onclick = goHome;
   }, 2500);
 }
@@ -796,12 +795,12 @@ async function contPair(preset){
         <div class="card">
           <h2>Step 2 · Send this reply to the Jug</h2>
           <div class="qr"><img alt="Reply code" src="${await qrImg(code)}"></div>
-          <div class="row">${navigator.share ? '<button class="btn water" id="shareCode">Share reply link</button>' : ''}<button class="btn ghost" id="copy">Copy reply link</button></div>
-          <p class="note">Nearby: the Jug scans this. Far apart: share the reply link back in the same chat; your friend taps it. This screen switches to the container as soon as the phones connect.</p>
-          <textarea id="myCode" readonly hidden>${link}</textarea>
+          <div class="row">${navigator.share ? '<button class="btn water" id="shareCode">Share reply link</button>' : ''}<button class="btn ghost" id="copy">Copy code</button></div>
+          <p class="note">Nearby: the Jug scans this. Far apart: share the reply link back in the same chat (your friend taps it), or copy the code and send it (your friend taps Paste reply). This screen switches to the container as soon as the phones connect.</p>
+          <textarea id="myCode" readonly hidden>${code}</textarea>
         </div>
         <button class="btn ghost" id="back2">Start over</button>`;
-      $('#copy').onclick = () => { copyText(link, $('#myCode')); $('#copy').textContent = 'Copied'; };
+      $('#copy').onclick = () => { copyText(code, $('#myCode')); $('#copy').textContent = 'Copied'; };
       if ($('#shareCode')) $('#shareCode').onclick = () => shareCode(link, 'Tap this link on the Jug phone to connect Pourr FT:');
       $('#back2').onclick = exitToHome;
     } catch(e){ if ($('#err')) $('#err').textContent = e.message || 'That code did not work. Try again.'; }
