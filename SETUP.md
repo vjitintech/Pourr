@@ -37,7 +37,7 @@ AdSense needs a domain you own, so use a custom domain instead of `github.io`.
 1. **Buy a domain** such as `pourr.app` or `pourr.in` from any registrar.
 2. **Point it at GitHub Pages:** in the repo, **Settings → Pages → Custom domain**, enter the domain and follow the DNS steps shown. Tick **Enforce HTTPS**.
 3. **Apply for AdSense** at **adsense.google.com** (you must be 18 or older) and add your domain.
-4. AdSense gives you a publisher ID like `ca-pub-1234567890123456`. Copy `ads.txt.example` to `ads.txt`, replace the ID, and push. It must be reachable at `https://your-domain/ads.txt`.
+4. Done for publisher `ca-pub-8906312854927768`: the AdSense verification tag is in the `<head>` of `index.html`, and `ads.txt` is at the site root. On transfer screens the browser may fetch that script, but the security policy blocks it from running.
 5. After approval, create two **Display ad units** (responsive) and set them in `index.html`:
 
 ```js

@@ -23,6 +23,9 @@
   document.head.appendChild(m);
 })();
 </script>
+<!-- Google AdSense. On transfer screens the security policy above blocks this script, so ads only run on the home screen. -->
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8906312854927768"
+     crossorigin="anonymous"></script>
 <style>
 /* Layout: one-screen app. Header, a big vessel in the middle, controls docked at the bottom. */
 :root{
@@ -317,7 +320,7 @@ async function scanButton(errEl, onCode){
 /* ---------- app owner settings (see SETUP.md) ---------- */
 const CONFIG = {
   // Google AdSense publisher ID, e.g. 'ca-pub-1234567890123456'. Leave empty to show no ads.
-  adClient: '',
+  adClient: 'ca-pub-8906312854927768',
   // AdSense ad unit IDs. Both appear on the home screen only (see SETUP.md for why).
   adSlots: { home: '', afterPour: '' },
   // Google Analytics 4 measurement ID, e.g. 'G-ABC123XYZ9'. Leave empty for no analytics.
@@ -371,7 +374,7 @@ async function iceServers(){ return navigator.onLine === false ? [] : STUN; }
 let adsLoaded = false;
 function placeAd(host, slot){
   if (CLEAN || !host || !CONFIG.adClient || !slot) return;
-  if (!adsLoaded) {
+  if (!adsLoaded && !document.querySelector('script[src*="adsbygoogle.js"]')) {
     adsLoaded = true;
     const sc = document.createElement('script');
     sc.async = true; sc.crossOrigin = 'anonymous';
