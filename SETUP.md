@@ -8,6 +8,28 @@ GitHub Pages serves the app from its global CDN for free. Users download about 1
 
 When you change any file, bump `VERSION` in `sw.js` so phones pick up the update.
 
+## Analytics with Google Analytics 4
+
+1. Go to **analytics.google.com**, create an account and a **Web** data stream for your site's address.
+2. Copy the **Measurement ID** (looks like `G-ABC123XYZ9`) and set it in `index.html`:
+
+```js
+gaId: 'G-ABC123XYZ9',
+```
+
+You'll see visitors, countries, devices and traffic sources, plus these Pourr events:
+
+| Event | When | Details sent |
+|---|---|---|
+| `role_select` | Someone picks Jug or Container | role |
+| `paired` | Two phones connect | role, route (same network / via internet) |
+| `pour_complete` | A pour finishes | files, MB, seconds, MB/s, damaged |
+| `receive_complete` | Files arrive | files, MB, seconds, damaged |
+| `save` | Files are saved | method, files |
+| `hotspot_help` | Networks block a direct connection | role |
+
+File names and contents are never sent. Transfer screens run no analytics code: their events are held on the phone and sent when the user returns to the home screen, so a few may be lost if someone closes the app mid-transfer.
+
 ## Ads with Google AdSense
 
 AdSense needs a domain you own, so use a custom domain instead of `github.io`.
@@ -20,10 +42,18 @@ AdSense needs a domain you own, so use a custom domain instead of `github.io`.
 
 ```js
 adClient: 'ca-pub-1234567890123456',
-adSlots: { home: '1111111111', done: '2222222222' },
+adSlots: { home: '1111111111', afterPour: '2222222222' },
 ```
 
-Ads appear only on the home screen and after a pour finishes, never on the pouring screen, because tilting a phone near an ad leads to accidental taps, which AdSense treats as a policy violation. The privacy policy AdSense requires is in [`privacy.html`](privacy.html). For visitors in Europe and the UK, turn on Google's consent message in **AdSense → Privacy & messaging**.
+Both ads appear on the home screen only: `afterPour` sits in the summary card shown when someone returns from a pour. Transfer screens never load ad code, for two reasons. Ad scripts could otherwise read files held in the page, and tilting a phone near an ad causes accidental taps, which AdSense treats as a policy violation. The privacy policy AdSense requires is in [`privacy.html`](privacy.html). For visitors in Europe and the UK, turn on Google's consent message in **AdSense → Privacy & messaging**.
+
+## Security built in
+
+- Files are encrypted in transit and checked with a SHA-256 fingerprint on arrival; damaged or altered files are rejected.
+- Both phones show a matching 4-digit safety code after pairing.
+- Transfer screens run under a strict Content-Security-Policy: only Pourr's own code runs and nothing can be uploaded anywhere.
+- Right-click and the usual inspect shortcuts are blocked. This deters casual copying only; the code is public on GitHub and any developer can still read it.
+- Turn on two-factor authentication for the GitHub account, since whoever can push to the repo controls the app.
 
 ## Native apps (next step)
 

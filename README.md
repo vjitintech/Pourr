@@ -29,6 +29,20 @@ Files always go straight from one phone to the other. There is no relay, no file
 - No backend: hosting is a static CDN, and transfers never touch a server, so traffic can grow without limits or cost.
 - Free for users, supported by ads. Owner steps are in [SETUP.md](SETUP.md).
 
+## Security
+
+Encrypted phone-to-phone transfer, a SHA-256 check on every file, a matching 4-digit safety code on both phones, and a strict security policy on transfer screens so no outside code can run while files are in the page. Details in [SETUP.md](SETUP.md).
+
+## Measured speed
+
+1 GB sent, verified and saved byte-identical in 42 seconds (about 24 MB/s) between two browsers on one 2-core machine. On real phones the Wi-Fi link sets the speed.
+
+## Contact
+
+pourrft@gmail.com
+
+© 2026 Pourr. All rights reserved.
+
 ## Test on one computer
 
 Open the page in two browser tabs, choose Jug in one and Container in the other, and exchange codes with the "copy / paste the code instead" options. Tap **Enable tilt to pour**, then use **Hold here to pour**.

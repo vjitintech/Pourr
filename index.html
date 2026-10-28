@@ -10,6 +10,19 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="referrer" content="no-referrer">
+<script>
+/* Transfer screens (?m=jug, ?m=cont, or a shared #o= link) run with a strict security policy:
+   only Pourr's own code may run and nothing can be sent to any other site. Ads and analytics
+   live only on the home screen, which never holds files. */
+(function(){
+  if (!/[?&]m=(jug|cont)\b/.test(location.search) && !/^#o=/.test(location.hash)) return;
+  var m = document.createElement('meta');
+  m.httpEquiv = 'Content-Security-Policy';
+  m.content = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self'; worker-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
+  document.head.appendChild(m);
+})();
+</script>
 <style>
 /* Layout: one-screen app. Header, a big vessel in the middle, controls docked at the bottom. */
 :root{
@@ -139,7 +152,17 @@ details.card{display:block}
 .netline .tag{white-space:normal;line-height:1.3}
 .ad{display:flex;flex-direction:column;gap:4px;min-height:60px;border-top:1px solid var(--line);padding-top:8px;overflow:hidden}
 .ad-label{font:500 10px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
-.foot{text-align:center;padding-bottom:4px}
+.foot{text-align:center;padding-bottom:4px;display:grid;gap:2px;font-size:13px;color:var(--muted)}
+.foot p{margin:0;max-width:none;color:var(--muted)}
+.linkbtn{appearance:none;border:0;background:none;color:var(--water);font:inherit;text-decoration:underline;cursor:pointer;padding:0 2px}
+.safety{display:grid;gap:2px;text-align:center;padding:8px 10px;border-radius:12px;border:1px dashed var(--line);font-size:13px;color:var(--muted)}
+.safety b{font:700 18px/1.2 var(--mono);color:var(--fg);letter-spacing:.12em;margin-left:6px}
+.safety span{font-size:12px}
+.tile.bad .cnt{background:var(--warn)}
+.tile.bad{border-color:var(--warn)}
+.card.last{gap:8px}
+body{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+input,textarea,.foot a,#mail{-webkit-touch-callout:default;-webkit-user-select:text;user-select:text}
 .foot a{color:var(--water)}
 details.card summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px;color:var(--fg);font-weight:500}
 .net{display:grid;gap:8px;margin-top:10px}
@@ -287,9 +310,47 @@ async function scanButton(errEl, onCode){
 const CONFIG = {
   // Google AdSense publisher ID, e.g. 'ca-pub-1234567890123456'. Leave empty to show no ads.
   adClient: '',
-  // AdSense ad unit IDs for each placement.
-  adSlots: { home: '', done: '' },
+  // AdSense ad unit IDs. Both appear on the home screen only (see SETUP.md for why).
+  adSlots: { home: '', afterPour: '' },
+  // Google Analytics 4 measurement ID, e.g. 'G-ABC123XYZ9'. Leave empty for no analytics.
+  gaId: '',
 };
+const CONTACT = 'pourrft@gmail.com';
+const YEAR = 2026;
+
+/* ---------- screen mode: home (ads, analytics) or a clean transfer screen ---------- */
+const MODE = new URLSearchParams(location.search).get('m');          // 'jug' | 'cont' | null
+const LINK_OFFER = (location.hash.match(/^#o=(.+)$/) || [])[1] || null;
+const CLEAN = MODE === 'jug' || MODE === 'cont' || !!LINK_OFFER;
+function goRole(r){
+  let gone = false;
+  const go = () => { if (!gone) { gone = true; location.href = location.pathname + '?m=' + r; } };
+  if (gaLoaded) { gtag('event', 'role_select', { role: r, event_callback: go, event_timeout: 400 }); setTimeout(go, 450); }
+  else { track('role_select', { role: r }); go(); }
+}
+function goHome(){ location.replace(location.pathname); }
+
+/* ---------- analytics: Google Analytics 4 on the home screen; transfer screens queue events ---------- */
+let gaLoaded = false;
+function loadAnalytics(){
+  if (CLEAN || gaLoaded || !CONFIG.gaId) return;
+  gaLoaded = true;
+  window.dataLayer = window.dataLayer || [];
+  window.gtag = function(){ dataLayer.push(arguments); };
+  gtag('js', new Date());
+  gtag('config', CONFIG.gaId);
+  const sc = document.createElement('script'); sc.async = true;
+  sc.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(CONFIG.gaId);
+  document.head.appendChild(sc);
+  let q = []; try { q = JSON.parse(sessionStorage.getItem('pourr.ev') || '[]'); sessionStorage.removeItem('pourr.ev'); } catch(e){}
+  for (const ev of q) gtag('event', ev[0], ev[1]);
+}
+function track(name, params){
+  params = params || {};
+  if (!CLEAN && gaLoaded) { gtag('event', name, params); return; }
+  try { const q = JSON.parse(sessionStorage.getItem('pourr.ev') || '[]'); q.push([name, params]); sessionStorage.setItem('pourr.ev', JSON.stringify(q.slice(-50))); } catch(e){}
+}
+function remember(summary){ try { sessionStorage.setItem('pourr.last', JSON.stringify(summary)); } catch(e){} }
 
 /* ---------- network: always phone to phone, never through a server ----------
    Same Wi-Fi or hotspot: devices find each other on the local network, no internet needed.
@@ -301,7 +362,7 @@ async function iceServers(){ return navigator.onLine === false ? [] : STUN; }
 /* ---------- ads: only on calm screens, never near the tilt area ---------- */
 let adsLoaded = false;
 function placeAd(host, slot){
-  if (!host || !CONFIG.adClient || !slot) return;
+  if (CLEAN || !host || !CONFIG.adClient || !slot) return;
   if (!adsLoaded) {
     adsLoaded = true;
     const sc = document.createElement('script');
@@ -322,6 +383,22 @@ async function routeLabel(){
     return t === 'relay' ? 'Paired · via relay' : (t === 'srflx' || t === 'prflx') ? 'Paired · via internet' : 'Paired · same network';
   } catch(e){ return 'Paired'; }
 }
+// 4-digit code from both phones' encryption fingerprints. Matching codes prove nobody sits in the middle.
+async function safetyCode(){
+  try {
+    const fp = sdp => ((sdp || '').match(/a=fingerprint:\S+ ([0-9A-F:]+)/i) || [])[1] || '';
+    const both = [fp(pc.localDescription.sdp), fp(pc.remoteDescription.sdp)].sort().join('|');
+    const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(both)));
+    return String(((h[0] << 16) | (h[1] << 8) | h[2]) % 10000).padStart(4, '0');
+  } catch(e){ return null; }
+}
+async function showSafety(){
+  const el = $('#safety'); if (!el) return;
+  const c = await safetyCode(); if (!c || !$('#safety')) return;
+  el.hidden = false;
+  el.innerHTML = `Safety code <b>${c.slice(0,2)} ${c.slice(2)}</b><span>Check the other phone shows the same code. If not, tap Exit.</span>`;
+}
+const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
 function shareCode(text, label){
   if (navigator.share) navigator.share({ text: `${label}\n${text}` }).catch(() => {});
 }
@@ -338,7 +415,11 @@ async function newPeer(){
 }
 function wireChannel(ch, onOpen){
   dc = ch; dc.binaryType = 'arraybuffer';
-  ch.onopen = async () => { setLink(true, 'Paired'); stopCamera(); onOpen(); setLink(true, await routeLabel()); };
+  ch.onopen = async () => {
+    setLink(true, 'Paired'); stopCamera(); onOpen(); showSafety();
+    const route = await routeLabel(); setLink(true, route);
+    track('paired', { role, route: route.replace('Paired · ', '') });
+  };
   ch.onclose = () => { if (ch === dc) peerGone(); };
 }
 function peerGone(){
@@ -375,7 +456,8 @@ function showHotspotHelp(){
       <button class="btn ${r === 'jug' ? 'clay' : 'water'}" id="again">Pair again</button>
     </div>
     <button class="btn ghost" id="back">Back to home</button>`;
-  $('#again').onclick = () => { resetAll(); r === 'jug' ? jugPair() : contPair(); };
+  track('hotspot_help', { role: r });
+  $('#again').onclick = () => { resetAll(); location.replace(location.pathname + '?m=' + (r === 'jug' ? 'jug' : 'cont')); };
   $('#back').onclick = exitToHome;
 }
 
@@ -396,7 +478,7 @@ $('#exit').onclick = () => {
 };
 function exitToHome(){
   try { if (dc && dc.readyState === 'open') dc.send(JSON.stringify({ t: 'bye' })); } catch(e){}
-  resetAll(); home();
+  resetAll(); goHome();
 }
 function resetAll(){
   session++;
@@ -423,9 +505,11 @@ function meter(){
   };
 }
 const mbps = r => (r / 1048576).toFixed(1) + ' MB/s';
+const dur = s => s < 0.1 ? 'under 0.1 s' : s < 60 ? s.toFixed(1) + ' s' : Math.floor(s / 60) + ' min ' + Math.round(s % 60) + ' s';
 /* ---------- home ---------- */
 function home(){
   stopCamera(); setLink(false, 'Not paired'); $('#exit').hidden = true;
+  if (CLEAN) return goHome();
   view.className = 'home';
   view.innerHTML = `
     <h1>Pour files from one phone into another.</h1>
@@ -444,11 +528,23 @@ function home(){
       <span class="tag on">Different networks · direct, phone to phone</span>
       <span class="tag on">No sign-up · no servers</span>
     </div>
+    <div id="lastPour"></div>
     <div id="adHome"></div>
-    <p class="note foot"><a href="privacy.html">Privacy</a> · Free, supported by ads. Files go straight from phone to phone.</p>`;
+    <footer class="foot">
+      <p>Free, supported by ads. Files go straight from phone to phone, encrypted.</p>
+      <p>Contact us: <a href="mailto:${CONTACT}" id="mail">${CONTACT}</a> <button class="linkbtn" id="copyMail">Copy</button> · <a href="privacy.html">Privacy</a></p>
+      <p>© ${YEAR} Pourr. All rights reserved.</p>
+    </footer>`;
+  loadAnalytics();
   placeAd($('#adHome'), CONFIG.adSlots.home);
-  $('#pickJug').onclick = jugPair;
-  $('#pickCont').onclick = () => contPair();
+  let last = null; try { last = JSON.parse(sessionStorage.getItem('pourr.last') || 'null'); sessionStorage.removeItem('pourr.last'); } catch(e){}
+  if (last) {
+    $('#lastPour').innerHTML = `<div class="card last"><h2>${esc(last.title)}</h2><p>${esc(last.text)}</p><div id="adAfter"></div></div>`;
+    placeAd($('#adAfter'), CONFIG.adSlots.afterPour);
+  }
+  $('#copyMail').onclick = () => { navigator.clipboard?.writeText(CONTACT).then(() => { $('#copyMail').textContent = 'Copied'; }).catch(() => { const r = document.createRange(); r.selectNodeContents($('#mail')); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }); };
+  $('#pickJug').onclick = () => goRole('jug');
+  $('#pickCont').onclick = () => goRole('cont');
 }
 
 /* ---------- JUG: pairing ---------- */
@@ -590,6 +686,7 @@ function jugStage(){
       <div class="gauge" id="gauge"></div>
     </div>
     <div class="dock" id="dock">
+      <div class="safety" id="safety" hidden></div>
       <div class="status" id="status"></div>
       <input type="file" id="pick" multiple hidden>
       <div class="row">
@@ -598,7 +695,12 @@ function jugStage(){
       </div>
       <button class="btn ghost" id="hold" disabled>Hold here to pour (no tilt sensor)</button>
     </div>`;
-  dc.onmessage = e => { if (typeof e.data === 'string') { try { if (JSON.parse(e.data).t === 'bye') peerGone(); } catch(_){} } };
+  dc.onmessage = e => {
+    if (typeof e.data !== 'string') return;
+    let m; try { m = JSON.parse(e.data); } catch(_){ return; }
+    if (m.t === 'bye') peerGone();
+    else if (m.t === 'ack') onAck(m);
+  };
   $('#add').onclick = () => $('#pick').click();
   $('#pick').onchange = e => { addToJug([...e.target.files]); e.target.value = ''; };
   $('#tiltBtn').onclick = async () => {
@@ -648,12 +750,36 @@ function jugLoop(my){
 const waitPour = () => pouring ? Promise.resolve() : new Promise(r => resumeWaiters.push(r));
 function waitDrain(ch){ return new Promise(r => { if (ch.bufferedAmount <= ch.bufferedAmountLowThreshold) return r(); ch.addEventListener('bufferedamountlow', r, { once: true }); }); }
 
+// Receiver confirmations for the current pour.
+let pourBatch = null;      // { ids:Set, total, ok, bad, bytes, t0, t1 }
+function onAck(m){
+  const b = pourBatch; if (!b || !b.ids.has(m.id)) return;
+  b.ids.delete(m.id); m.ok ? b.ok++ : b.bad++;
+  if (b.done) reportBatch();
+}
+function reportBatch(){
+  const b = pourBatch; if (!b || !b.done) return;
+  if (b.ids.size) { setStatus(`Complete · ${b.total} of ${b.total} poured · confirming ${b.ok + b.bad} of ${b.total}…`, true); return; }
+  const secs = (b.t1 - b.t0) / 1000, rate = secs > 0 ? b.bytes / secs : 0;
+  if (b.bad) setStatus(`${b.ok} of ${b.total} delivered and verified · ${b.bad} damaged on the way. Add ${b.bad > 1 ? 'them' : 'it'} again and pour.`);
+  else setStatus(`Complete · ${b.total} of ${b.total} delivered and verified · ${fmt(b.bytes)} in ${dur(secs)}`, true);
+  track('pour_complete', { files: b.total, mb: Math.round(b.bytes / 1048576), seconds: Math.round(secs), mb_per_s: Math.round(rate / 1048576), damaged: b.bad });
+  remember({ title: b.bad ? 'Pour finished with errors' : 'Pour complete', text: `${b.ok} of ${b.total} file${b.total > 1 ? 's' : ''} delivered and verified · ${fmt(b.bytes)} in ${dur(secs)}` });
+}
+
+const SLICE = 4 * 1048576;                              // read and fingerprint 4 MB at a time
+async function readSlice(f, off){
+  const buf = await f.slice(off, off + SLICE).arrayBuffer();
+  return { buf, h: hex(await crypto.subtle.digest('SHA-256', buf)) };
+}
 async function pourQueue(){
   const my = session, ch = dc;
   sending = true;
   const CH = chunkSize(), HIGH = 4 * 1048576;
   ch.bufferedAmountLowThreshold = 1048576;
   let idx = 0, bytes = 0;
+  pourBatch = { ids: new Set(), total: 0, ok: 0, bad: 0, bytes: 0, t0: performance.now(), t1: 0, done: false };
+  const batch = pourBatch;
   const m = meter();
   const tick = setInterval(() => {
     m.add(bytes); const r = m.rate(), el = $('#speed');
@@ -667,12 +793,16 @@ async function pourQueue(){
       const it = jugFiles[0], f = it.file;              // first in, first out
       idx++;
       const of = idx - 1 + jugFiles.length;
+      batch.ids.add(it.id); batch.total = idx;
       const cnt = it.el.querySelector('.cnt'); cnt.hidden = false; cnt.textContent = `${idx} of ${of}`;
       setStatus(`Pouring ${idx} of ${of} · ${f.name}`);
-      ch.send(JSON.stringify({ t: 'meta', id: it.id, name: f.name, size: f.size, type: f.type, idx, of }));
-      const READ = 4 * 1048576;                          // read big slices, send small chunks
-      for (let off = 0; off < f.size; off += READ) {
-        const buf = await f.slice(off, off + READ).arrayBuffer();
+      ch.send(JSON.stringify({ t: 'meta', id: it.id, name: f.name, size: f.size, type: f.type, idx, of, slice: SLICE }));
+      // Read and fingerprint the next slice while the current one is sending.
+      let next = f.size ? readSlice(f, 0) : null, si = 0;
+      for (let off = 0; off < f.size; off += SLICE, si++) {
+        const { buf, h } = await next;
+        next = off + SLICE < f.size ? readSlice(f, off + SLICE) : null;
+        ch.send(JSON.stringify({ t: 'h', i: si, h }));
         for (let p = 0; p < buf.byteLength; p += CH) {
           if (!pouring) await waitPour();
           if (ch.bufferedAmount > HIGH) await waitDrain(ch);
@@ -690,8 +820,8 @@ async function pourQueue(){
       jugFiles.shift(); renderJug();
     }
     ch.send(JSON.stringify({ t: 'done', count: idx }));
-    setStatus(`Complete · ${idx} of ${idx} poured. The jug is empty.`, true);
-    if (!$('#adDone')) { const d = document.createElement('div'); d.id = 'adDone'; $('#dock').appendChild(d); placeAd(d, CONFIG.adSlots.done); }
+    batch.bytes = bytes; batch.t1 = performance.now(); batch.done = true;
+    reportBatch();
     if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
   } catch(e) { if (my === session) setStatus('Pour stopped: the connection dropped.'); }
   finally {
@@ -718,7 +848,7 @@ function contStage(){
       </div>
       <div class="gauge" id="gauge"></div>
     </div>
-    <div class="dock" id="dock"><div class="status" id="status"></div><div id="saveArea"></div></div>`;
+    <div class="dock" id="dock"><div class="safety" id="safety" hidden></div><div class="status" id="status"></div><div id="saveArea"></div></div>`;
   dc.onmessage = onRx;
 }
 function startRxBatch(){
@@ -732,35 +862,54 @@ function startRxBatch(){
   $('#empty').hidden = true;
   $('#saveArea').innerHTML = '';
 }
+let finalizing = Promise.resolve(), damaged = 0;
+function checkSlice(c){
+  const parts = c.pend, i = c.sliceI++;
+  c.pend = []; c.pendBytes = 0;
+  c.verify = c.verify.then(async ok => {
+    const d = hex(await crypto.subtle.digest('SHA-256', await new Blob(parts).arrayBuffer()));
+    return ok && d === c.hashes[i];
+  });
+}
 function onRx(e){
   if (typeof e.data === 'string') {
     const m = JSON.parse(e.data);
     if (m.t === 'bye') return peerGone();
-    if (m.t === 'batch') startRxBatch();
+    if (m.t === 'batch') { startRxBatch(); damaged = 0; }
     else if (m.t === 'meta') {
       if (!rx) startRxBatch();
       const el = document.createElement('div'); el.className = 'tile arriving'; el.innerHTML = tileHTML(m.name, m.size);
       const cnt = el.querySelector('.cnt'); cnt.hidden = false; cnt.textContent = `${m.idx} of ${m.of}`;
       $('#inside').appendChild(el);                    // column-reverse: first file settles at the bottom
-      current = { ...m, chunks: [], got: 0, el };
-      rx.idx = m.idx; rx.of = m.of;
+      current = { ...m, chunks: [], got: 0, el, hashes: [], pend: [], pendBytes: 0, sliceI: 0, verify: Promise.resolve(true) };
+      rx.idx = m.idx; rx.of = m.of; rx.t0 = rx.t0 || performance.now();
       scheduleUI();
     }
+    else if (m.t === 'h' && current) current.hashes[m.i] = m.h;
     else if (m.t === 'end' && current) {
-      const file = new File(current.chunks, current.name, { type: current.type || 'application/octet-stream' });
-      current.chunks = null;
-      current.el.classList.add('done');
-      current.el.querySelector('.bar b').style.width = '100%';
-      current.el.querySelector('.cnt').textContent = `✓ ${current.idx} of ${current.of}`;
-      received.push(file); current = null;
-      if (navigator.vibrate) navigator.vibrate(10);
-      scheduleUI();
+      const c = current; current = null;
+      if (c.pendBytes) checkSlice(c);
+      const okSize = c.got === c.size;
+      finalizing = finalizing.then(async () => {
+        const ok = (await c.verify) && okSize;
+        const file = ok ? new File(c.chunks, c.name, { type: c.type || 'application/octet-stream' }) : null;
+        c.chunks = null;
+        c.el.classList.add(ok ? 'done' : 'bad');
+        c.el.querySelector('.bar b').style.width = '100%';
+        c.el.querySelector('.cnt').textContent = ok ? `✓ ${c.idx} of ${c.of}` : `✗ damaged`;
+        if (ok) received.push(file); else damaged++;
+        try { dc && dc.readyState === 'open' && dc.send(JSON.stringify({ t: 'ack', id: c.id, ok })); } catch(e){}
+        if (navigator.vibrate) navigator.vibrate(10);
+        scheduleUI();
+      });
     }
-    else if (m.t === 'done') finishRx(m.count);
+    else if (m.t === 'done') { const n = m.count; finalizing = finalizing.then(() => finishRx(n)); }
     return;
   }
-  if (!current) return;
-  current.chunks.push(e.data); current.got += e.data.byteLength; rx.bytes += e.data.byteLength;
+  const c = current; if (!c) return;
+  c.chunks.push(e.data); c.pend.push(e.data);
+  c.got += e.data.byteLength; c.pendBytes += e.data.byteLength; rx.bytes += e.data.byteLength;
+  if (c.pendBytes >= c.slice) checkSlice(c);
   scheduleUI();
 }
 // Draw progress at most once per frame instead of on every chunk.
@@ -776,10 +925,14 @@ function drawRx(){
   $('#gauge').textContent = received.length ? `${received.length} file${received.length>1?'s':''} ready to save` : '';
 }
 function finishRx(count){
+  const secs = rx && rx.t0 ? (performance.now() - rx.t0) / 1000 : 0, bytes = rx ? rx.bytes : 0;
   clearInterval(rxTick); rx = null;
   const sp = $('#speed'); if (sp) sp.textContent = '';
   $('#fill').style.height = '92%';
-  setStatus(`Complete · ${count} of ${count} received`, true);
+  if (damaged) setStatus(`${count - damaged} of ${count} received and verified · ${damaged} damaged on the way. Ask the sender to pour ${damaged > 1 ? 'them' : 'it'} again.`);
+  else setStatus(`Complete · ${count} of ${count} received and verified · ${fmt(bytes)} in ${dur(secs)}`, true);
+  track('receive_complete', { files: count, mb: Math.round(bytes / 1048576), seconds: Math.round(secs), damaged });
+  remember({ title: damaged ? 'Received with errors' : 'Files received', text: `${count - damaged} of ${count} file${count > 1 ? 's' : ''} received and verified · ${fmt(bytes)} in ${dur(secs)}` });
   $('#gauge').textContent = `${received.length} file${received.length>1?'s':''} ready to save`;
   showSaveCard();
 }
@@ -804,9 +957,7 @@ function showSaveCard(){
         <button class="btn ghost" id="discard">Discard</button>
       </div>
       <div class="saved-list" id="list"></div>
-    </div>
-    <div id="adDone"></div>`;
-  placeAd($('#adDone'), CONFIG.adSlots.done);
+    </div>`;
   if (canDir) $('#saveDir').onclick = saveToFolder;
   if (canShare) $('#saveShare').onclick = saveViaShare;
   $('#saveDl').onclick = saveDownloads;
@@ -825,6 +976,7 @@ async function saveToFolder(){
       const w = await h.createWritable(); await w.write(f); await w.close();
     }
     clearReceived();
+    track('save', { method: 'folder', files: files.length });
     setStatus(`Saved ${files.length} of ${files.length} to "${dir.name}"`, true);
   } catch(e){ setStatus('Could not save to that folder. Try another folder or Save to Downloads.'); }
 }
@@ -835,7 +987,7 @@ async function freeName(dir, name){
 }
 async function saveViaShare(){
   const files = received.slice();
-  try { await navigator.share({ files }); clearReceived(); setStatus(`Sent ${files.length} file${files.length>1?'s':''} to your chosen app`, true); }
+  try { await navigator.share({ files }); clearReceived(); track('save', { method: 'share', files: files.length }); setStatus(`Sent ${files.length} file${files.length>1?'s':''} to your chosen app`, true); }
   catch(e){ if (e.name !== 'AbortError') setStatus('Save to Files is not available here. Use Save to Downloads.'); }
 }
 async function saveDownloads(){
@@ -844,6 +996,7 @@ async function saveDownloads(){
     const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.textContent = 'Save ' + f.name;
     list.appendChild(a); a.click(); await new Promise(r => setTimeout(r, 350));
   }
+  track('save', { method: 'downloads', files: files.length });
   setStatus(`Saved ${files.length} of ${files.length} to Downloads. Tap a name if one was blocked.`, true);
   const done = document.createElement('button'); done.className = 'btn ghost'; done.textContent = 'Done';
   done.onclick = () => { clearReceived(); setStatus('Ready for the next pour.'); };
@@ -861,10 +1014,23 @@ function clearReceived(){
 /* ---------- boot ---------- */
 if (!window.RTCPeerConnection) {
   view.innerHTML = `<h1>This browser can't pair phones.</h1><p>Open this page in Chrome, Safari or Firefox on a phone.</p>`;
-} else {
-  const m = location.hash.match(/^#o=(.+)$/);
-  if (m) { history.replaceState(null, '', location.pathname); contPair(m[1]); } else home();
-}
+} else if (LINK_OFFER) {
+  history.replaceState(null, '', location.pathname + '?m=cont');
+  contPair(LINK_OFFER);
+} else if (MODE === 'jug') jugPair();
+else if (MODE === 'cont') contPair();
+else home();
+
+/* ---------- casual-copy deterrents: no right-click menu or inspect shortcuts ----------
+   This stops casual users; it cannot stop a determined developer (no website can). */
+document.addEventListener('contextmenu', e => { if (!e.target.closest('input, textarea')) e.preventDefault(); });
+document.addEventListener('keydown', e => {
+  const k = (e.key || '').toUpperCase(), mod = e.ctrlKey || e.metaKey;
+  if (k === 'F12' || (mod && e.shiftKey && ['I', 'J', 'C', 'K'].includes(k)) || (mod && k === 'U') || (e.metaKey && e.altKey && ['I', 'J', 'C', 'U'].includes(k))) {
+    e.preventDefault(); e.stopPropagation();
+  }
+}, true);
+document.addEventListener('dragstart', e => { if (e.target.tagName === 'IMG') e.preventDefault(); });
 try { navigator.wakeLock?.request('screen').catch(()=>{}); } catch(e){}
 // Install for offline use: after the first visit Pourr opens instantly, even with no internet.
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});

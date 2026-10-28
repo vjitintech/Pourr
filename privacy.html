@@ -21,14 +21,15 @@ a{color:var(--water)}
 <main>
   <p><a href="./">← Back to Pourr</a></p>
   <h1>Privacy Policy</h1>
-  <p class="muted">Last updated: 27 October 2026</p>
+  <p class="muted">Last updated: 28 October 2026</p>
 
   <h2>Your files</h2>
-  <p>Pourr sends files directly from one device to the other. Files are encrypted in transit by your browser (WebRTC uses DTLS encryption). Pourr has no file servers, so your files are never uploaded or stored anywhere.</p>
+  <p>Pourr sends files directly from one device to the other. Files are encrypted in transit by your browser (WebRTC uses DTLS encryption), and every file is checked with a SHA-256 fingerprint when it arrives, so damaged or altered files are rejected. Pourr has no file servers, so your files are never uploaded or stored anywhere.</p>
   <p>There is no relay and no file server. If the two devices cannot reach each other directly, Pourr asks you to connect them with a hotspot instead.</p>
 
   <h2>Pairing</h2>
-  <p>Pairing codes and links contain network addresses the two devices need to find each other. They are shared only between the two devices, by QR code or by a link you choose to send. When online, each device asks a public address-lookup (STUN) server run by Google or Cloudflare for its own internet address; no file data or personal data is sent to it.</p>
+  <p>After pairing, both devices show the same 4-digit safety code. If the codes differ, someone may be intercepting the connection; exit and pair again in person.</p>
+  <p>Pairing codes and links contain the network (IP) addresses the two devices need to find each other, so the other device can see your IP address, as with any direct transfer. Treat a shared pairing link like a private message. They are shared only between the two devices, by QR code or by a link you choose to send. When online, each device asks a public address-lookup (STUN) server run by Google or Cloudflare for its own internet address; no file data or personal data is sent to it.</p>
 
   <h2>Camera and motion sensors</h2>
   <p>The camera is used only to scan pairing QR codes, and the motion sensor only to detect the pouring tilt. Neither is recorded or sent anywhere.</p>
@@ -36,11 +37,13 @@ a{color:var(--water)}
   <h2>Advertising</h2>
   <p>Pourr is free and is supported by ads served by Google AdSense. Google and its partners may use cookies to serve ads based on your visits to this and other websites. You can turn off personalised ads at <a href="https://adssettings.google.com" target="_blank" rel="noopener">Google Ad Settings</a>. Learn more at <a href="https://policies.google.com/technologies/ads" target="_blank" rel="noopener">How Google uses information from sites that use its services</a>.</p>
 
-  <h2>Settings stored on your device</h2>
-  <p>If you add your own relay server, those settings are saved only in your browser on that device.</p>
+  <h2>Analytics</h2>
+  <p>The home screen uses Google Analytics to count visits and completed transfers (number of files, total size and speed). File names and file contents are never sent. Transfer screens load no ads or analytics code at all.</p>
 
   <h2>Contact</h2>
-  <p>Questions about this policy: open an issue at <a href="https://github.com/vjitintech/Pourr/issues" target="_blank" rel="noopener">github.com/vjitintech/Pourr</a>.</p>
+  <p>Questions about this policy: <a href="mailto:pourrft@gmail.com">pourrft@gmail.com</a></p>
+
+  <p class="muted" style="margin-top:32px">© 2026 Pourr. All rights reserved.</p>
 </main>
 </body>
 </html>
